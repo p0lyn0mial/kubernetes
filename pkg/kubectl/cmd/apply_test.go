@@ -30,8 +30,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	autoscalingv1 "k8s.io/api/autoscaling/v1"
 	kubeerr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -44,6 +46,7 @@ import (
 	cmdtesting "k8s.io/kubernetes/pkg/kubectl/cmd/testing"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/util/openapi"
+	kubectltesting "k8s.io/kubernetes/pkg/kubectl/testing"
 	"k8s.io/kubernetes/pkg/printers"
 )
 
@@ -1153,12 +1156,11 @@ func TestForceApply(t *testing.T) {
 	pathRC := "/namespaces/test/replicationcontrollers/" + nameRC
 	pathRCList := "/namespaces/test/replicationcontrollers"
 	expected := map[string]int{
-		"getOk":       9,
+		"getOk":       7,
 		"getNotFound": 1,
 		"getList":     1,
 		"patch":       6,
 		"delete":      1,
-		"put":         1,
 		"post":        1,
 	}
 
@@ -1224,10 +1226,40 @@ func TestForceApply(t *testing.T) {
 				}
 			}),
 		}
+		discoveryResources := []*metav1.APIResourceList{
+			{
+				GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
+				APIResources: []metav1.APIResource{
+					{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
+					{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
+				},
+			},
+		}
+
+		pathsResources := map[string]runtime.Object{
+			"/api/v1/namespaces/test/replicationcontrollers/test-rc/scale": &autoscalingv1.Scale{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Scale",
+					APIVersion: autoscalingv1.SchemeGroupVersion.String(),
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "test-rc",
+				},
+				Spec: autoscalingv1.ScaleSpec{Replicas: 3},
+			},
+		}
+
+		scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tf.ScaleClient = scaleClient
 		tf.OpenAPISchemaFunc = fn
 		tf.Client = tf.UnstructuredClient
 		tf.ClientConfig = &restclient.Config{}
 		tf.Namespace = "test"
+
 		buf := bytes.NewBuffer([]byte{})
 		errBuf := bytes.NewBuffer([]byte{})
 
@@ -1248,6 +1280,14 @@ func TestForceApply(t *testing.T) {
 		}
 		if errBuf.String() != "" {
 			t.Fatalf("unexpected error output: %s", errBuf.String())
+		}
+
+		scale, err := scaleClient.Scales(tf.Namespace).Get(schema.GroupResource{Group: "", Resource: "replicationcontrollers"}, nameRC)
+		if err != nil {
+			t.Error(err)
+		}
+		if scale.Spec.Replicas != 0 {
+			t.Errorf("a scale subresource has unexpected number of replicas, got %d expected 0", scale.Spec.Replicas)
 		}
 	}
 }

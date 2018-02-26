@@ -2927,12 +2927,8 @@ func getReplicasFromRuntimeObject(obj runtime.Object) (int32, error) {
 	}
 }
 
-func getReaperForKind(internalClientset internalclientset.Interface, kind schema.GroupKind) (kubectl.Reaper, error) {
-	return kubectl.ReaperFor(kind, internalClientset)
-}
-
 // DeleteResourceAndPods deletes a given resource and all pods it spawned
-func DeleteResourceAndPods(clientset clientset.Interface, internalClientset internalclientset.Interface, kind schema.GroupKind, ns, name string) error {
+func DeleteResourceAndPods(clientset clientset.Interface, internalClientset internalclientset.Interface, scaleClient scaleclient.ScalesGetter, kind schema.GroupKind, ns, name string) error {
 	By(fmt.Sprintf("deleting %v %s in namespace %s", kind, name, ns))
 
 	rtObject, err := getRuntimeObjectForKind(clientset, kind, ns, name)
@@ -2947,7 +2943,7 @@ func DeleteResourceAndPods(clientset clientset.Interface, internalClientset inte
 	if err != nil {
 		return err
 	}
-	reaper, err := getReaperForKind(internalClientset, kind)
+	reaper, err := kubectl.ReaperFor(kind, internalClientset, scaleClient)
 	if err != nil {
 		return err
 	}

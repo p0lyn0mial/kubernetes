@@ -37,7 +37,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	restclient "k8s.io/client-go/rest"
-	scaleclient "k8s.io/client-go/scale"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/apps"
 	"k8s.io/kubernetes/pkg/apis/batch"
@@ -288,19 +287,11 @@ func (f *ring1Factory) Scaler(mapping *meta.RESTMapping) (kubectl.Scaler, error)
 		return nil, err
 	}
 
-	// create scales getter
-	// TODO(p0lyn0mial): put scalesGetter to a factory
-	discoClient, err := f.clientAccessFactory.DiscoveryClient()
-	if err != nil {
-		return nil, err
-	}
-	restClient, err := f.clientAccessFactory.RESTClient()
-	if err != nil {
-		return nil, err
-	}
 	mapper, _ := f.Object()
-	resolver := scaleclient.NewDiscoveryScaleKindResolver(discoClient)
-	scalesGetter := scaleclient.New(restClient, mapper, dynamic.LegacyAPIPathResolverFunc, resolver)
+	scalesGetter, err := f.clientAccessFactory.ScaleClient(mapper)
+	if err != nil {
+		return nil, err
+	}
 	gvk := mapping.GroupVersionKind.GroupVersion().WithResource(mapping.Resource)
 
 	return kubectl.ScalerFor(mapping.GroupVersionKind.GroupKind(), clientset.Batch(), scalesGetter, gvk.GroupResource()), nil
@@ -309,7 +300,12 @@ func (f *ring1Factory) Scaler(mapping *meta.RESTMapping) (kubectl.Scaler, error)
 func (f *ring1Factory) Reaper(mapping *meta.RESTMapping) (kubectl.Reaper, error) {
 	mappingVersion := mapping.GroupVersionKind.GroupVersion()
 	clientset, clientsetErr := f.clientAccessFactory.ClientSetForVersion(&mappingVersion)
-	reaper, reaperErr := kubectl.ReaperFor(mapping.GroupVersionKind.GroupKind(), clientset)
+	mapper, _ := f.Object()
+	scaler, err := f.clientAccessFactory.ScaleClient(mapper)
+	if err != nil {
+		return nil, err
+	}
+	reaper, reaperErr := kubectl.ReaperFor(mapping.GroupVersionKind.GroupKind(), clientset, scaler)
 
 	if kubectl.IsNoSuchReaperError(reaperErr) {
 		return nil, reaperErr

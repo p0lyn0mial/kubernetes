@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 	"k8s.io/apimachinery/pkg/util/wait"
+	scaleclient "k8s.io/client-go/scale"
 	oapi "k8s.io/kube-openapi/pkg/util/proto"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset"
@@ -309,6 +310,11 @@ func RunApply(f cmdutil.Factory, cmd *cobra.Command, out, errOut io.Writer, opti
 			if _, ok := annotationMap[api.LastAppliedConfigAnnotation]; !ok {
 				fmt.Fprintf(errOut, warningNoLastAppliedConfigAnnotation, options.cmdBaseName)
 			}
+			mapper, _ := f.Object()
+			scaler, err := f.ScaleClient(mapper)
+			if err != nil {
+				return err
+			}
 			overwrite := cmdutil.GetFlagBool(cmd, "overwrite")
 			helper := resource.NewHelper(info.Client, info.Mapping)
 			patcher := &patcher{
@@ -325,6 +331,7 @@ func RunApply(f cmdutil.Factory, cmd *cobra.Command, out, errOut io.Writer, opti
 				timeout:       options.Timeout,
 				gracePeriod:   options.GracePeriod,
 				openapiSchema: openapiSchema,
+				scaleClient:   scaler,
 			}
 
 			patchBytes, patchedObject, err := patcher.patch(info.Object, modified, info.Source, info.Namespace, info.Name, errOut)
@@ -490,6 +497,11 @@ func (p *pruner) prune(f cmdutil.Factory, namespace string, mapping *meta.RESTMa
 	if err != nil {
 		return err
 	}
+	mapper, _ := f.Object()
+	scaler, err := f.ScaleClient(mapper)
+	if err != nil {
+		return err
+	}
 
 	for _, obj := range objs {
 		annots, err := mapping.MetadataAccessor.Annotations(obj)
@@ -513,7 +525,7 @@ func (p *pruner) prune(f cmdutil.Factory, namespace string, mapping *meta.RESTMa
 			return err
 		}
 		if !p.dryRun {
-			if err := p.delete(namespace, name, mapping); err != nil {
+			if err := p.delete(namespace, name, mapping, scaler); err != nil {
 				return err
 			}
 		}
@@ -522,16 +534,16 @@ func (p *pruner) prune(f cmdutil.Factory, namespace string, mapping *meta.RESTMa
 	return nil
 }
 
-func (p *pruner) delete(namespace, name string, mapping *meta.RESTMapping) error {
+func (p *pruner) delete(namespace, name string, mapping *meta.RESTMapping, scaleClient scaleclient.ScalesGetter) error {
 	c, err := p.clientFunc(mapping)
 	if err != nil {
 		return err
 	}
 
-	return runDelete(namespace, name, mapping, c, nil, p.cascade, p.gracePeriod, p.clientsetFunc)
+	return runDelete(namespace, name, mapping, c, nil, p.cascade, p.gracePeriod, p.clientsetFunc, scaleClient)
 }
 
-func runDelete(namespace, name string, mapping *meta.RESTMapping, c resource.RESTClient, helper *resource.Helper, cascade bool, gracePeriod int, clientsetFunc func() (internalclientset.Interface, error)) error {
+func runDelete(namespace, name string, mapping *meta.RESTMapping, c resource.RESTClient, helper *resource.Helper, cascade bool, gracePeriod int, clientsetFunc func() (internalclientset.Interface, error), scaleClient scaleclient.ScalesGetter) error {
 	if !cascade {
 		if helper == nil {
 			helper = resource.NewHelper(c, mapping)
@@ -542,7 +554,7 @@ func runDelete(namespace, name string, mapping *meta.RESTMapping, c resource.RES
 	if err != nil {
 		return err
 	}
-	r, err := kubectl.ReaperFor(mapping.GroupVersionKind.GroupKind(), cs)
+	r, err := kubectl.ReaperFor(mapping.GroupVersionKind.GroupKind(), cs, scaleClient)
 	if err != nil {
 		if _, ok := err.(*kubectl.NoSuchReaperError); !ok {
 			return err
@@ -564,7 +576,7 @@ func (p *patcher) delete(namespace, name string) error {
 	if err != nil {
 		return err
 	}
-	return runDelete(namespace, name, p.mapping, c, p.helper, p.cascade, p.gracePeriod, p.clientsetFunc)
+	return runDelete(namespace, name, p.mapping, c, p.helper, p.cascade, p.gracePeriod, p.clientsetFunc, p.scaleClient)
 }
 
 type patcher struct {
@@ -585,6 +597,7 @@ type patcher struct {
 	gracePeriod int
 
 	openapiSchema openapi.Resources
+	scaleClient   scaleclient.ScalesGetter
 }
 
 func (p *patcher) patchSimple(obj runtime.Object, modified []byte, source, namespace, name string, errOut io.Writer) ([]byte, runtime.Object, error) {

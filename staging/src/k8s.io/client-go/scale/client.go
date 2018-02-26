@@ -196,7 +196,7 @@ func (c *namespacedScaleClient) Update(resource schema.GroupResource, scale *aut
 		Body(scaleUpdateBytes).
 		Do()
 	if err := result.Error(); err != nil {
-		return nil, fmt.Errorf("could not update the scale for %s %s: %v", resource.String(), scale.Name, err)
+		return nil, err
 	}
 
 	scaleBytes, err := result.Raw()

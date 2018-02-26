@@ -263,6 +263,7 @@ var _ = SIGDescribe("Load capacity", func() {
 					framework.ExpectNoError(framework.DeleteResourceAndPods(
 						f.ClientSet,
 						f.InternalClientset,
+						f.ScalesGetter,
 						extensions.Kind("DaemonSet"),
 						config.Namespace,
 						config.Name,
@@ -674,7 +675,7 @@ func deleteResource(wg *sync.WaitGroup, config testutils.RunObjectConfig, deleti
 			fmt.Sprintf("deleting %v %s", config.GetKind(), config.GetName()))
 	} else {
 		framework.ExpectNoError(framework.DeleteResourceAndPods(
-			config.GetClient(), config.GetInternalClient(), config.GetKind(), config.GetNamespace(), config.GetName()),
+			config.GetClient(), config.GetInternalClient(), config.GetScalesGetter(), config.GetKind(), config.GetNamespace(), config.GetName()),
 			fmt.Sprintf("deleting %v %s", config.GetKind(), config.GetName()))
 	}
 }

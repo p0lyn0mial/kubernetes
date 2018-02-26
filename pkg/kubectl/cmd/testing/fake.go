@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/rest/fake"
+	scaleclient "k8s.io/client-go/scale"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	api "k8s.io/kubernetes/pkg/apis/core"
@@ -235,6 +236,7 @@ type TestFactory struct {
 	Mapper             meta.RESTMapper
 	Typer              runtime.ObjectTyper
 	Client             kubectl.RESTClient
+	ScaleClient        scaleclient.ScalesGetter
 	UnstructuredClient kubectl.RESTClient
 	Describer          printers.Describer
 	Printer            printers.ResourcePrinter
@@ -295,6 +297,10 @@ func (f *FakeFactory) Object() (meta.RESTMapper, runtime.ObjectTyper) {
 	fakeDs := &fakeCachedDiscoveryClient{}
 	expander := cmdutil.NewShortcutExpander(mapper, fakeDs)
 	return expander, typer
+}
+
+func (f *FakeFactory) ScaleClient(mapper meta.RESTMapper) (scaleclient.ScalesGetter, error) {
+	return nil, nil
 }
 
 func (f *FakeFactory) CategoryExpander() categories.CategoryExpander {
@@ -723,6 +729,10 @@ func (f *fakeAPIFactory) DiscoveryClient() (discovery.CachedDiscoveryInterface, 
 
 	cacheDir := filepath.Join(f.tf.TmpDir, ".kube", "cache", "discovery")
 	return cmdutil.NewCachedDiscoveryClient(discoveryClient, cacheDir, time.Duration(10*time.Minute)), nil
+}
+
+func (f *fakeAPIFactory) ScaleClient(mapper meta.RESTMapper) (scaleclient.ScalesGetter, error) {
+	return f.tf.ScaleClient, nil
 }
 
 func (f *fakeAPIFactory) CategoryExpander() categories.CategoryExpander {

@@ -52,6 +52,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	scaleclient "k8s.io/client-go/scale"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
@@ -64,6 +65,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubectl/util/transport"
 	"k8s.io/kubernetes/pkg/printers"
 	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
+	"k8s.io/kubernetes/staging/src/k8s.io/client-go/dynamic"
 )
 
 type ring0Factory struct {
@@ -231,6 +233,19 @@ func (f *ring0Factory) RESTClient() (*restclient.RESTClient, error) {
 		return nil, err
 	}
 	return restclient.RESTClientFor(clientConfig)
+}
+
+func (f *ring0Factory) ScaleClient(mapper meta.RESTMapper) (scaleclient.ScalesGetter, error) {
+	discoClient, err := f.DiscoveryClient()
+	if err != nil {
+		return nil, err
+	}
+	restClient, err := f.RESTClient()
+	if err != nil {
+		return nil, err
+	}
+	resolver := scaleclient.NewDiscoveryScaleKindResolver(discoClient)
+	return scaleclient.New(restClient, mapper, dynamic.LegacyAPIPathResolverFunc, resolver), nil
 }
 
 func (f *ring0Factory) Decoder(toInternal bool) runtime.Decoder {

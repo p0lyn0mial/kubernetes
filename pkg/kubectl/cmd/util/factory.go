@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	scaleclient "k8s.io/client-go/scale"
 	"k8s.io/client-go/tools/clientcmd"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	apiv1 "k8s.io/kubernetes/pkg/apis/core/v1"
@@ -106,6 +107,9 @@ type ClientAccessFactory interface {
 	// BareClientConfig returns a client.Config that has NOT been negotiated. It's
 	// just directions to the server. People use this to build RESTMappers on top of
 	BareClientConfig() (*restclient.Config, error)
+
+	// ScaleClient gives you back scale getter
+	ScaleClient(mapper meta.RESTMapper) (scaleclient.ScalesGetter, error)
 
 	// TODO remove.  This should be rolled into `ClientSet`
 	ClientSetForVersion(requiredVersion *schema.GroupVersion) (internalclientset.Interface, error)
