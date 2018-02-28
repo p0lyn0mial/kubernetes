@@ -40,13 +40,14 @@ import (
 	sptest "k8s.io/apimachinery/pkg/util/strategicpatch/testing"
 	restclient "k8s.io/client-go/rest"
 	"k8s.io/client-go/rest/fake"
+	fakescale "k8s.io/client-go/scale/fake"
+	testcore "k8s.io/client-go/testing"
 	"k8s.io/kubernetes/pkg/api/testapi"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	cmdtesting "k8s.io/kubernetes/pkg/kubectl/cmd/testing"
 	cmdutil "k8s.io/kubernetes/pkg/kubectl/cmd/util"
 	"k8s.io/kubernetes/pkg/kubectl/cmd/util/openapi"
-	kubectltesting "k8s.io/kubernetes/pkg/kubectl/testing"
 	"k8s.io/kubernetes/pkg/printers"
 )
 
@@ -1226,33 +1227,42 @@ func TestForceApply(t *testing.T) {
 				}
 			}),
 		}
-		discoveryResources := []*metav1.APIResourceList{
-			{
-				GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-				APIResources: []metav1.APIResource{
-					{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-					{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-				},
-			},
-		}
 
-		pathsResources := map[string]runtime.Object{
-			"/api/v1/namespaces/test/replicationcontrollers/test-rc/scale": &autoscalingv1.Scale{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Scale",
-					APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-				},
+		newReplicas := int32(3)
+		scaleClient := &fakescale.FakeScaleClient{}
+		scaleClient.AddReactor("get", "replicationcontrollers", func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+			action := rawAction.(testcore.GetAction)
+			if action.GetName() != "test-rc" {
+				return false, nil, nil
+			}
+			obj := &autoscalingv1.Scale{
 				ObjectMeta: metav1.ObjectMeta{
-					Name: "test-rc",
+					Name:      action.GetName(),
+					Namespace: action.GetNamespace(),
 				},
-				Spec: autoscalingv1.ScaleSpec{Replicas: 3},
-			},
-		}
-
-		scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+				Spec: autoscalingv1.ScaleSpec{
+					Replicas: newReplicas,
+				},
+			}
+			return true, obj, nil
+		})
+		scaleClient.AddReactor("update", "replicationcontrollers", func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+			action := rawAction.(testcore.UpdateAction)
+			obj := action.GetObject().(*autoscalingv1.Scale)
+			if obj.Name != "test-rc" {
+				return false, nil, nil
+			}
+			newReplicas = obj.Spec.Replicas
+			return true, &autoscalingv1.Scale{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      obj.Name,
+					Namespace: action.GetNamespace(),
+				},
+				Spec: autoscalingv1.ScaleSpec{
+					Replicas: newReplicas,
+				},
+			}, nil
+		})
 
 		tf.ScaleClient = scaleClient
 		tf.OpenAPISchemaFunc = fn
