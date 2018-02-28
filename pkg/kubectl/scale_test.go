@@ -22,55 +22,93 @@ import (
 	"testing"
 	"time"
 
-	appsv1beta1 "k8s.io/api/apps/v1beta1"
-	appsv1beta2 "k8s.io/api/apps/v1beta2"
 	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/scale"
+	fakescale "k8s.io/client-go/scale/fake"
 	testcore "k8s.io/client-go/testing"
 	"k8s.io/kubernetes/pkg/apis/batch"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	batchclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/batch/internalversion"
-	kubectltesting "k8s.io/kubernetes/pkg/kubectl/testing"
 )
 
-func TestReplicationControllerScaleRetry(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-				{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-			},
-		},
-	}
-
-	pathsResources := map[string]runtime.Object{
-		"/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale": &autoscalingv1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-			},
+func savingScaleClient(resource string, name string, initialReplicas int32) (scale.ScalesGetter, *int32) {
+	newReplicas := new(int32)
+	*newReplicas = initialReplicas
+	scaleClient := &fakescale.FakeScaleClient{}
+	scaleClient.AddReactor("get", resource, func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+		action := rawAction.(testcore.GetAction)
+		if action.GetName() != name {
+			return false, nil, nil
+		}
+		obj := &autoscalingv1.Scale{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo-v1",
+				Name:      action.GetName(),
+				Namespace: action.GetNamespace(),
 			},
-			Spec: autoscalingv1.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale": {
-			"PUT": *kerrors.NewConflict(api.Resource("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+			Spec: autoscalingv1.ScaleSpec{
+				Replicas: *newReplicas,
+			},
+		}
+		return true, obj, nil
+	})
+	scaleClient.AddReactor("update", resource, func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+		action := rawAction.(testcore.UpdateAction)
+		obj := action.GetObject().(*autoscalingv1.Scale)
+		if obj.Name != name {
+			return false, nil, nil
+		}
+		*newReplicas = obj.Spec.Replicas
+		return true, &autoscalingv1.Scale{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      obj.Name,
+				Namespace: action.GetNamespace(),
+			},
+			Spec: autoscalingv1.ScaleSpec{
+				Replicas: *newReplicas,
+			},
+		}, nil
+	})
+
+	return scaleClient, newReplicas
+}
+
+func erroringScaleClient(resource string, name string, initialReplicas int32, toThrow error) scale.ScalesGetter {
+	scaleClient := &fakescale.FakeScaleClient{}
+	scaleClient.AddReactor("get", resource, func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+		action := rawAction.(testcore.GetAction)
+		if action.GetName() != name {
+			return false, nil, nil
+		}
+		obj := &autoscalingv1.Scale{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      action.GetName(),
+				Namespace: action.GetNamespace(),
+			},
+			Spec: autoscalingv1.ScaleSpec{
+				Replicas: initialReplicas,
+			},
+		}
+		return true, obj, nil
+	})
+	scaleClient.AddReactor("update", resource, func(rawAction testcore.Action) (handled bool, ret runtime.Object, err error) {
+		action := rawAction.(testcore.UpdateAction)
+		obj := action.GetObject().(*autoscalingv1.Scale)
+		if obj.Name != name {
+			return false, nil, nil
+		}
+		return true, nil, toThrow
+	})
+
+	return scaleClient
+}
+
+func TestReplicationControllerScaleRetry(t *testing.T) {
+	scaleClient := erroringScaleClient("replicationcontrollers", "foo-v1", 2, kerrors.NewConflict(api.Resource("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "", Resource: "replicationcontrollers"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -94,36 +132,7 @@ func TestReplicationControllerScaleRetry(t *testing.T) {
 }
 
 func TestReplicationControllerScaleInvalid(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-				{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale": &autoscalingv1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo-v1",
-			},
-			Spec: autoscalingv1.ScaleSpec{Replicas: 1},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale": {
-			"PUT": *kerrors.NewInvalid(api.Kind("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient := erroringScaleClient("replicationcontrollers", "foo-v1", 2, kerrors.NewInvalid(api.Kind("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "", Resource: "replicationcontrollers"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -142,83 +151,33 @@ func TestReplicationControllerScaleInvalid(t *testing.T) {
 }
 
 func TestReplicationControllerScale(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-				{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale": &autoscalingv1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo-v1",
-			},
-			Spec: autoscalingv1.ScaleSpec{Replicas: 2},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("replicationcontrollers", "foo-v1", 2)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "", Resource: "replicationcontrollers"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo-v1"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 
 	if err != nil {
 		t.Fatalf("unexpected error occurred = %v while scaling the resource", err)
 	}
-	currentReplicas := pathsResources["/api/v1/namespaces/default/replicationcontrollers/foo-v1/scale"].(*autoscalingv1.Scale).Spec.Replicas
-	if currentReplicas != int32(count) {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, count)
+	if *currScale != int32(count) {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, count)
 	}
 }
 
 func TestReplicationControllerScaleFailsPreconditions(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-				{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: autoscalingv1.ScaleSpec{Replicas: 10},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	name := "foo"
+	scaleClient, currScale := savingScaleClient("replicationcontrollers", name, 10)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "", Resource: "replicationcontrollers"})
 	preconditions := ScalePrecondition{2, ""}
 	count := uint(3)
-	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err == nil {
 		t.Fatal("expected to get an error but none was returned")
 	}
-	currentReplicas := pathsResources["/api/v1/namespaces/default/replicationcontrollers/foo/scale"].(*autoscalingv1.Scale).Spec.Replicas
-	if currentReplicas != 10 {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, 10)
+	if *currScale != 10 {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, 10)
 	}
 }
 
@@ -486,36 +445,7 @@ func TestValidateJob(t *testing.T) {
 }
 
 func TestDeploymentScaleRetry(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": &appsv1beta2.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta2.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": {
-			"PUT": *kerrors.NewConflict(api.Resource("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient := erroringScaleClient("deployments", "foo", 2, kerrors.NewConflict(api.Resource("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "deployments"})
 	preconditions := &ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -539,76 +469,22 @@ func TestDeploymentScaleRetry(t *testing.T) {
 }
 
 func TestDeploymentScale(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": &appsv1beta2.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta2.ScaleSpec{Replicas: 1},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("deployments", "foo", 1)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "deployments"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentReplicas := pathsResources["/apis/apps/v1beta2/namespaces/default/deployments/foo/scale"].(*appsv1beta2.Scale).Spec.Replicas
-	if currentReplicas != int32(count) {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, count)
+	if *currScale != int32(count) {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, count)
 	}
 }
 
 func TestDeploymentScaleInvalid(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": &appsv1beta2.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta2.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": {
-			"PUT": *kerrors.NewInvalid(api.Kind("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient := erroringScaleClient("deployments", "foo", 2, kerrors.NewInvalid(api.Kind("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "deployments"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -627,117 +503,38 @@ func TestDeploymentScaleInvalid(t *testing.T) {
 }
 
 func TestDeploymentScaleFailsPreconditions(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/foo/scale": &appsv1beta2.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta2.ScaleSpec{Replicas: 10},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("deployments", "foo", 10)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "deployments"})
 	preconditions := ScalePrecondition{2, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err == nil {
 		t.Fatal("exptected to get an error but none was returned")
 	}
-	currentReplicas := pathsResources["/apis/apps/v1beta2/namespaces/default/deployments/foo/scale"].(*appsv1beta2.Scale).Spec.Replicas
-	if currentReplicas != 10 {
-		t.Fatalf("unexpected number of replicas =%v, expected =%v", currentReplicas, 10)
+	if *currScale != 10 {
+		t.Fatalf("unexpected number of replicas =%v, expected =%v", *currScale, 10)
 	}
 }
 
 func TestStatefulSetScale(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "statefullsets", Namespaced: true, Kind: "StatefullSet"},
-				{Name: "statefullsets/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale": &appsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefullset"})
+	scaleClient, currScale := savingScaleClient("statefulsets", "foo", 2)
+	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefulsets"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentReplicas := pathsResources["/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale"].(*appsv1beta1.Scale).Spec.Replicas
-	if currentReplicas != int32(count) {
-		t.Fatalf("unexpected number of replicas =%v, expected =%v", currentReplicas, count)
+	if *currScale != int32(count) {
+		t.Fatalf("unexpected number of replicas =%v, expected =%v", *currScale, count)
 	}
 }
 
 func TestStatefulSetScaleRetry(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "statefullsets", Namespaced: true, Kind: "StatefullSet"},
-				{Name: "statefullsets/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale": &appsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale": {
-			"PUT": *kerrors.NewConflict(api.Resource("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefullset"})
+	scaleClient := erroringScaleClient("statefulsets", "foo", 2, kerrors.NewConflict(api.Resource("Status"), "foo", nil))
+	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefulsets"})
 	preconditions := &ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo"
@@ -760,32 +557,8 @@ func TestStatefulSetScaleRetry(t *testing.T) {
 }
 
 func TestStatefulSetScaleInvalid(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "statefull", Namespaced: true, Kind: "StatefullSet"},
-				{Name: "statefull/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale": &appsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefullset"})
+	scaleClient := erroringScaleClient("statefulsets", "foo", 2, kerrors.NewInvalid(api.Kind("Status"), "foo", nil))
+	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefulsets"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo"
@@ -803,116 +576,37 @@ func TestStatefulSetScaleInvalid(t *testing.T) {
 }
 
 func TestStatefulSetScaleFailsPreconditions(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "statefullsets", Namespaced: true, Kind: "StatefullSet"},
-				{Name: "statefullsets/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale": &appsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: appsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: appsv1beta1.ScaleSpec{Replicas: 10},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("statefulsets", "foo", 10)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "apps", Resource: "statefullset"})
 	preconditions := ScalePrecondition{2, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err == nil {
 		t.Fatal("expected to get an error but none was returned")
 	}
-	currentReplicas := pathsResources["/apis/apps/v1beta1/namespaces/default/statefullsets/foo/scale"].(*appsv1beta1.Scale).Spec.Replicas
-	if currentReplicas != 10 {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, 10)
+	if *currScale != 10 {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, 10)
 	}
 }
 
 func TestReplicaSetScale(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-				{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: extensionsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("replicasets", "foo", 2)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "extensions", Resource: "replicasets"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentReplicas := pathsResources["/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale"].(*extensionsv1beta1.Scale).Spec.Replicas
-	if currentReplicas != int32(count) {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, count)
+	if *currScale != int32(count) {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, count)
 	}
 }
 
 func TestReplicaSetScaleRetry(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-				{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: extensionsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": {
-			"PUT": *kerrors.NewConflict(api.Resource("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient := erroringScaleClient("replicasets", "foo", 2, kerrors.NewConflict(api.Resource("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "extensions", Resource: "replicasets"})
 	preconditions := &ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -936,36 +630,7 @@ func TestReplicaSetScaleRetry(t *testing.T) {
 }
 
 func TestReplicaSetScaleInvalid(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-				{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: extensionsv1beta1.ScaleSpec{Replicas: 2},
-		},
-	}
-	pathsOnError := map[string]map[string]kerrors.StatusError{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": {
-			"PUT": *kerrors.NewInvalid(api.Kind("Status"), "foo", nil),
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, pathsOnError)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient := erroringScaleClient("replicasets", "foo", 2, kerrors.NewInvalid(api.Kind("Status"), "foo", nil))
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "extensions", Resource: "replicasets"})
 	preconditions := ScalePrecondition{-1, ""}
 	count := uint(3)
@@ -984,78 +649,23 @@ func TestReplicaSetScaleInvalid(t *testing.T) {
 }
 
 func TestReplicaSetsGetterFailsPreconditions(t *testing.T) {
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-				{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-			},
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-			TypeMeta: metav1.TypeMeta{
-				Kind:       "Scale",
-				APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-			},
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "foo",
-			},
-			Spec: extensionsv1beta1.ScaleSpec{Replicas: 10},
-		},
-	}
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, currScale := savingScaleClient("replicasets", "foo", 10)
 	scaler := ScalerFor(schema.GroupKind{}, nil, scaleClient, schema.GroupResource{Group: "extensions", Resource: "replicasets"})
 	preconditions := ScalePrecondition{2, ""}
 	count := uint(3)
 	name := "foo"
-	err = scaler.Scale("default", name, count, &preconditions, nil, nil)
+	err := scaler.Scale("default", name, count, &preconditions, nil, nil)
 	if err == nil {
 		t.Fatal("expected to get an error but non was returned")
 	}
-	currentReplicas := pathsResources["/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale"].(*extensionsv1beta1.Scale).Spec.Replicas
-	if currentReplicas != 10 {
-		t.Fatalf("unexpected number of replicas = %v, expected = %v", currentReplicas, 10)
+	if *currScale != 10 {
+		t.Fatalf("unexpected number of replicas = %v, expected = %v", *currScale, 10)
 	}
 }
 
 // TestGenericScaleSimple exercises GenericScaler.ScaleSimple method
 func TestGenericScaleSimple(t *testing.T) {
-	// test data
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	appsV1beta2Scale := &appsv1beta2.Scale{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Scale",
-			APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "abc",
-		},
-		Spec: appsv1beta2.ScaleSpec{Replicas: 10},
-		Status: appsv1beta2.ScaleStatus{
-			Replicas: 10,
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/abc/scale": appsV1beta2Scale,
-	}
-
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, _ := savingScaleClient("deployment", "abc", 10)
 
 	// test scenarios
 	scenarios := []struct {
@@ -1064,7 +674,6 @@ func TestGenericScaleSimple(t *testing.T) {
 		newSize      int
 		targetGR     schema.GroupResource
 		resName      string
-		scaleGetter  scale.ScalesGetter
 		expectError  bool
 	}{
 		// scenario 1: scale up the "abc" deployment
@@ -1074,7 +683,6 @@ func TestGenericScaleSimple(t *testing.T) {
 			newSize:      20,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 		},
 		// scenario 2: scale down the "abc" deployment
 		{
@@ -1083,7 +691,6 @@ func TestGenericScaleSimple(t *testing.T) {
 			newSize:      5,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 		},
 		// scenario 3: precondition error, expected size is 1,
 		// note that the previous scenario (2) set the size to 5
@@ -1093,7 +700,6 @@ func TestGenericScaleSimple(t *testing.T) {
 			newSize:      5,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 			expectError:  true,
 		},
 		// scenario 4: precondition is not validated when the precondition size is set to -1
@@ -1103,7 +709,6 @@ func TestGenericScaleSimple(t *testing.T) {
 			newSize:      5,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 		},
 		// scenario 5: precondition error, resource version mismatch
 		{
@@ -1112,7 +717,6 @@ func TestGenericScaleSimple(t *testing.T) {
 			newSize:      5,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 			expectError:  true,
 		},
 	}
@@ -1120,7 +724,7 @@ func TestGenericScaleSimple(t *testing.T) {
 	// act
 	for index, scenario := range scenarios {
 		t.Run(fmt.Sprintf("running scenario %d: %s", index+1, scenario.name), func(t *testing.T) {
-			target := ScalerFor(schema.GroupKind{}, nil, scenario.scaleGetter, scenario.targetGR)
+			target := ScalerFor(schema.GroupKind{}, nil, scaleClient, scenario.targetGR)
 
 			resVersion, err := target.ScaleSimple("default", scenario.resName, &scenario.precondition, uint(scenario.newSize))
 
@@ -1140,36 +744,7 @@ func TestGenericScaleSimple(t *testing.T) {
 // TestGenericScale exercises GenericScaler.Scale method
 func TestGenericScale(t *testing.T) {
 	// test data
-	discoveryResources := []*metav1.APIResourceList{
-		{
-			GroupVersion: appsv1beta2.SchemeGroupVersion.String(),
-			APIResources: []metav1.APIResource{
-				{Name: "deployments", Namespaced: true, Kind: "Deployment"},
-				{Name: "deployments/scale", Namespaced: true, Kind: "Scale", Group: "apps", Version: "v1beta2"},
-			},
-		},
-	}
-	appsV1beta2Scale := &appsv1beta2.Scale{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Scale",
-			APIVersion: appsv1beta2.SchemeGroupVersion.String(),
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "abc",
-		},
-		Spec: appsv1beta2.ScaleSpec{Replicas: 10},
-		Status: appsv1beta2.ScaleStatus{
-			Replicas: 10,
-		},
-	}
-	pathsResources := map[string]runtime.Object{
-		"/apis/apps/v1beta2/namespaces/default/deployments/abc/scale": appsV1beta2Scale,
-	}
-
-	scaleClient, err := kubectltesting.FakeScaleClient(discoveryResources, pathsResources, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	scaleClient, _ := savingScaleClient("deployment", "abc", 10)
 
 	// test scenarios
 	scenarios := []struct {
@@ -1178,7 +753,6 @@ func TestGenericScale(t *testing.T) {
 		newSize         int
 		targetGR        schema.GroupResource
 		resName         string
-		scaleGetter     scale.ScalesGetter
 		waitForReplicas *RetryParams
 		expectError     bool
 	}{
@@ -1189,7 +763,6 @@ func TestGenericScale(t *testing.T) {
 			newSize:      20,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "abc",
-			scaleGetter:  scaleClient,
 		},
 		// scenario 2: a resource name cannot be empty
 		{
@@ -1198,7 +771,6 @@ func TestGenericScale(t *testing.T) {
 			newSize:      20,
 			targetGR:     schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:      "",
-			scaleGetter:  scaleClient,
 			expectError:  true,
 		},
 		// scenario 3: wait for replicas error due to status.Replicas != spec.Replicas
@@ -1208,7 +780,6 @@ func TestGenericScale(t *testing.T) {
 			newSize:         20,
 			targetGR:        schema.GroupResource{Group: "apps", Resource: "deployment"},
 			resName:         "abc",
-			scaleGetter:     scaleClient,
 			waitForReplicas: &RetryParams{time.Duration(5 * time.Second), time.Duration(5 * time.Second)},
 			expectError:     true,
 		},
@@ -1217,7 +788,7 @@ func TestGenericScale(t *testing.T) {
 	// act
 	for index, scenario := range scenarios {
 		t.Run(fmt.Sprintf("running scenario %d: %s", index+1, scenario.name), func(t *testing.T) {
-			target := ScalerFor(schema.GroupKind{}, nil, scenario.scaleGetter, scenario.targetGR)
+			target := ScalerFor(schema.GroupKind{}, nil, scaleClient, scenario.targetGR)
 
 			err := target.Scale("default", scenario.resName, uint(scenario.newSize), &scenario.precondition, nil, scenario.waitForReplicas)
 

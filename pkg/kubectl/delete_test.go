@@ -23,8 +23,6 @@ import (
 	"testing"
 	"time"
 
-	autoscalingv1 "k8s.io/api/autoscaling/v1"
-	extensionsv1beta1 "k8s.io/api/extensions/v1beta1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,20 +35,17 @@ import (
 	"k8s.io/kubernetes/pkg/apis/extensions"
 	"k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/fake"
 	coreclient "k8s.io/kubernetes/pkg/client/clientset_generated/internalclientset/typed/core/internalversion"
-	kubectltesting "k8s.io/kubernetes/pkg/kubectl/testing"
 )
 
 func TestReplicationControllerStop(t *testing.T) {
 	name := "foo"
 	ns := "default"
 	tests := []struct {
-		Name               string
-		Objs               []runtime.Object
-		DiscoveryResources []*metav1.APIResourceList
-		PathsResources     map[string]runtime.Object
-		ScaledDown         bool
-		StopError          error
-		ExpectedActions    []string
+		Name            string
+		Objs            []runtime.Object
+		ScaledDown      bool
+		StopError       error
+		ExpectedActions []string
 	}{
 		{
 			Name: "OnlyOneRC",
@@ -67,27 +62,6 @@ func TestReplicationControllerStop(t *testing.T) {
 								Selector: map[string]string{"k1": "v1"}},
 						},
 					},
-				},
-			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-						{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo",
-					},
-					Spec: autoscalingv1.ScaleSpec{Replicas: 3},
 				},
 			},
 			ScaledDown:      true,
@@ -120,27 +94,6 @@ func TestReplicationControllerStop(t *testing.T) {
 					},
 				},
 			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-						{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo",
-					},
-					Spec: autoscalingv1.ScaleSpec{Replicas: 3},
-				},
-			},
 			ScaledDown:      true,
 			StopError:       nil,
 			ExpectedActions: []string{"get", "list", "delete"},
@@ -170,27 +123,6 @@ func TestReplicationControllerStop(t *testing.T) {
 								Selector: map[string]string{"k1": "v1"}},
 						},
 					},
-				},
-			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-						{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo",
-					},
-					Spec: autoscalingv1.ScaleSpec{Replicas: 3},
 				},
 			},
 			ScaledDown:      false, // scale resource was not scaled down due to overlapping controllers
@@ -233,27 +165,6 @@ func TestReplicationControllerStop(t *testing.T) {
 					},
 				},
 			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-						{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo",
-					},
-					Spec: autoscalingv1.ScaleSpec{Replicas: 3},
-				},
-			},
 
 			ScaledDown:      false, // scale resource was not scaled down due to overlapping controllers
 			StopError:       fmt.Errorf("Detected overlapping controllers for rc foo: baz,zaz, please manage deletion individually with --cascade=false."),
@@ -287,27 +198,6 @@ func TestReplicationControllerStop(t *testing.T) {
 					},
 				},
 			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: schema.GroupVersion{Version: "v1"}.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicationcontrollers", Namespaced: true, Kind: "ReplicationController"},
-						{Name: "replicationcontrollers/scale", Namespaced: true, Kind: "Scale", Group: "autoscaling", Version: "v1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/api/v1/namespaces/default/replicationcontrollers/foo/scale": &autoscalingv1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: autoscalingv1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: "foo",
-					},
-					Spec: autoscalingv1.ScaleSpec{Replicas: 3},
-				},
-			},
 			ScaledDown:      false, // scale resource was not scaled down because there is still an additional replica
 			StopError:       nil,
 			ExpectedActions: []string{"get", "list", "delete"},
@@ -316,10 +206,7 @@ func TestReplicationControllerStop(t *testing.T) {
 
 	for _, test := range tests {
 		copiedForWatch := test.Objs[0].DeepCopyObject()
-		scaleClient, err := kubectltesting.FakeScaleClient(test.DiscoveryResources, test.PathsResources, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		scaleClient, _ := savingScaleClient("replicationcontrollers", "foo", 3)
 		fake := fake.NewSimpleClientset(test.Objs...)
 		fakeWatch := watch.NewFake()
 		fake.PrependWatchReactor("replicationcontrollers", testcore.DefaultWatchReactor(fakeWatch, nil))
@@ -329,7 +216,7 @@ func TestReplicationControllerStop(t *testing.T) {
 		}()
 
 		reaper := ReplicationControllerReaper{fake.Core(), time.Millisecond, time.Millisecond, scaleClient}
-		err = reaper.Stop(ns, name, 0, nil)
+		err := reaper.Stop(ns, name, 0, nil)
 		if !reflect.DeepEqual(err, test.StopError) {
 			t.Errorf("%s unexpected error: %v", test.Name, err)
 			continue
@@ -364,13 +251,11 @@ func TestReplicaSetStop(t *testing.T) {
 	name := "foo"
 	ns := "default"
 	tests := []struct {
-		Name               string
-		Objs               []runtime.Object
-		DiscoveryResources []*metav1.APIResourceList
-		PathsResources     map[string]runtime.Object
-		ScaledDown         bool
-		StopError          error
-		ExpectedActions    []string
+		Name            string
+		Objs            []runtime.Object
+		ScaledDown      bool
+		StopError       error
+		ExpectedActions []string
 	}{
 		{
 			Name: "OnlyOneRS",
@@ -391,27 +276,6 @@ func TestReplicaSetStop(t *testing.T) {
 							},
 						},
 					},
-				},
-			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-						{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: name,
-					},
-					Spec: extensionsv1beta1.ScaleSpec{Replicas: 3},
 				},
 			},
 			ScaledDown:      true,
@@ -446,27 +310,6 @@ func TestReplicaSetStop(t *testing.T) {
 					},
 				},
 			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-						{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: name,
-					},
-					Spec: extensionsv1beta1.ScaleSpec{Replicas: 3},
-				},
-			},
 			ScaledDown:      true,
 			StopError:       nil,
 			ExpectedActions: []string{"get", "delete"},
@@ -477,13 +320,10 @@ func TestReplicaSetStop(t *testing.T) {
 
 	for _, test := range tests {
 		fake := fake.NewSimpleClientset(test.Objs...)
-		scaleClient, err := kubectltesting.FakeScaleClient(test.DiscoveryResources, test.PathsResources, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		scaleClient, _ := savingScaleClient("replicaset", name, 3)
 
 		reaper := ReplicaSetReaper{fake.Extensions(), time.Millisecond, time.Millisecond, scaleClient, schema.GroupResource{Group: "extensions", Resource: "replicaset"}}
-		err = reaper.Stop(ns, name, 0, nil)
+		err := reaper.Stop(ns, name, 0, nil)
 		if !reflect.DeepEqual(err, test.StopError) {
 			t.Errorf("%s unexpected error: %v", test.Name, err)
 			continue
@@ -630,13 +470,12 @@ func TestDeploymentStop(t *testing.T) {
 	}
 	trueVar := true
 	tests := []struct {
-		Name               string
-		Objs               []runtime.Object
-		DiscoveryResources []*metav1.APIResourceList
-		PathsResources     map[string]runtime.Object
-		ScaledDown         bool
-		StopError          error
-		ExpectedActions    []string
+		Name             string
+		Objs             []runtime.Object
+		ScaledDown       bool
+		NoScaleAvailable bool
+		StopError        error
+		ExpectedActions  []string
 	}{
 		{
 			Name: "SimpleDeployment",
@@ -655,8 +494,8 @@ func TestDeploymentStop(t *testing.T) {
 					},
 				},
 			},
-			PathsResources: nil,
-			StopError:      nil,
+			NoScaleAvailable: true,
+			StopError:        nil,
 			ExpectedActions: []string{"get:deployments", "update:deployments",
 				"get:deployments", "list:replicasets", "delete:deployments"},
 		},
@@ -705,27 +544,6 @@ func TestDeploymentStop(t *testing.T) {
 					},
 				},
 			},
-			DiscoveryResources: []*metav1.APIResourceList{
-				{
-					GroupVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					APIResources: []metav1.APIResource{
-						{Name: "replicasets", Namespaced: true, Kind: "ReplicaSet"},
-						{Name: "replicasets/scale", Namespaced: true, Kind: "Scale", Group: "extensions", Version: "v1beta1"},
-					},
-				},
-			},
-			PathsResources: map[string]runtime.Object{
-				"/apis/extensions/v1beta1/namespaces/default/replicasets/foo/scale": &extensionsv1beta1.Scale{
-					TypeMeta: metav1.TypeMeta{
-						Kind:       "Scale",
-						APIVersion: extensionsv1beta1.SchemeGroupVersion.String(),
-					},
-					ObjectMeta: metav1.ObjectMeta{
-						Name: name,
-					},
-					Spec: extensionsv1beta1.ScaleSpec{Replicas: 3},
-				},
-			},
 			ScaledDown: true,
 			StopError:  nil,
 			ExpectedActions: []string{"get:deployments", "update:deployments",
@@ -735,14 +553,14 @@ func TestDeploymentStop(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		scaleClient, err := kubectltesting.FakeScaleClient(test.DiscoveryResources, test.PathsResources, nil)
-		if err != nil {
-			t.Fatal(err)
+		scaleClient, _ := savingScaleClient("deployments", "foo", 3)
+		if test.NoScaleAvailable {
+			scaleClient, _ = savingScaleClient("foobars", "baz", -37)
 		}
 
 		fake := fake.NewSimpleClientset(test.Objs...)
 		reaper := DeploymentReaper{fake.Extensions(), fake.Extensions(), time.Millisecond, time.Millisecond, scaleClient, schema.GroupResource{Group: "extensions", Resource: "deployments"}}
-		err = reaper.Stop(ns, name, 0, nil)
+		err := reaper.Stop(ns, name, 0, nil)
 		if !reflect.DeepEqual(err, test.StopError) {
 			t.Errorf("%s unexpected error: %v", test.Name, err)
 			continue
