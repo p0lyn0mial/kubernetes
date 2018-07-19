@@ -17,6 +17,10 @@ limitations under the License.
 package generators
 
 import (
+	"os"
+	"path"
+	"strings"
+
 	"github.com/golang/glog"
 
 	clientgentypes "k8s.io/code-generator/cmd/client-gen/types"
@@ -24,7 +28,6 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
-	"strings"
 )
 
 func NameSystems() namer.NameSystems {
@@ -43,6 +46,16 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 
 	packages := generator.Packages{}
 	for _, inputDir := range arguments.InputDirs {
+
+		registerFileName := "register.go"
+		searchPath := path.Join(args.DefaultSourceTree(), inputDir, registerFileName)
+		if _, err := os.Stat(path.Join(searchPath)); err == nil {
+			glog.V(5).Infof("skipping the generation of %s file because %s already exists in the path %s", arguments.OutputFileBaseName, registerFileName, searchPath)
+			continue
+		} else if err != nil && !os.IsNotExist(err) {
+			glog.Fatalf("an error %v has occured while checking if %s exists", err, registerFileName)
+		}
+
 		pkg := context.Universe.Package(inputDir)
 		gv := clientgentypes.GroupVersion{}
 		{
@@ -54,7 +67,7 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 			gv.Group = clientgentypes.Group(pathParts[len(pathParts)-2])
 			gv.Version = clientgentypes.Version(pathParts[len(pathParts)-1])
 
-			// it there is a comment of the form "// +groupName=somegroup" or "// +groupName=somegroup.foo.bar.io",
+			// if there is a comment of the form "// +groupName=somegroup" or "// +groupName=somegroup.foo.bar.io",
 			// extract the fully qualified API group name from it and overwrite the group inferred from the package path
 			if override := types.ExtractCommentTags("+", pkg.DocComments)["groupName"]; override != nil {
 				groupName := override[0]

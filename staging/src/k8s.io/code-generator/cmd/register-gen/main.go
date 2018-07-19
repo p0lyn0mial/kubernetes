@@ -22,10 +22,10 @@ import (
 
 	"github.com/golang/glog"
 	"github.com/spf13/pflag"
+
 	"k8s.io/code-generator/cmd/register-gen/generators"
 	"k8s.io/code-generator/pkg/util"
 	"k8s.io/gengo/args"
-
 	generatorargs "k8s.io/code-generator/cmd/register-gen/args"
 )
 

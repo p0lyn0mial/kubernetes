@@ -19,6 +19,7 @@ package generators
 import (
 	"io"
 	"text/template"
+	"sort"
 
 	clientgentypes "k8s.io/code-generator/cmd/client-gen/types"
 	"k8s.io/gengo/generator"
@@ -37,13 +38,6 @@ func (g *registerExternalGenerator) Filter(_ *generator.Context, _ *types.Type) 
 	return false
 }
 
-func (g *registerExternalGenerator) Imports(c *generator.Context) []string {
-	imports := []string{
-		"metav1 \"k8s.io/apimachinery/pkg/apis/meta/v1\"",
-	}
-	return imports
-}
-
 func (g *registerExternalGenerator) Finalize(context *generator.Context, w io.Writer) error {
 	typesToGenerateOnlyNames := make([]string, len(g.typesToGenerate))
 	for index, typeToGenerate := range g.typesToGenerate {
@@ -52,24 +46,29 @@ func (g *registerExternalGenerator) Finalize(context *generator.Context, w io.Wr
 
 	registerTemplateParam := struct {
 		clientgentypes.GroupVersion
-		// TODO: I have noticed that the order is not preserved for example:
-		// sometimes the lists holds Database, DatabaseList
-		// but sometimes DatabaseList, Database
-		//
-		// do we want to sort the list ?
 		TypesToGenerate []string
 	}{
 		g.gv,
 		typesToGenerateOnlyNames,
 	}
 
+	// sort the list of types to register, so that the generator produces stable output
+	sort.Strings(registerTemplateParam.TypesToGenerate)
+
 	temp := template.Must(template.New("register-template").Parse(registerExternalTypesTemplate))
 	return temp.Execute(w, registerTemplateParam)
 }
 
 var registerExternalTypesTemplate = `
+// GroupName specifies the group name used to register the objects.
+const GroupName = "{{.Group}}"
+
+// GroupVersion specifies the group and the version used to register the objects.
+var GroupVersion = v1.GroupVersion{Group: GroupName, Version: "{{.Version}}"}
+
 // SchemeGroupVersion is group version used to register these objects
-var SchemeGroupVersion = schema.GroupVersion{Group: "{{.Group}}", Version: "{{.Version}}"}
+// Deprecated: use GroupName instead.
+var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "{{.Version}}"}
 
 // Resource takes an unqualified resource and returns a Group qualified GroupResource
 func Resource(resource string) schema.GroupResource {
@@ -80,7 +79,9 @@ var (
 	// localSchemeBuilder and AddToScheme will stay in k8s.io/kubernetes.
 	SchemeBuilder      runtime.SchemeBuilder
 	localSchemeBuilder = &SchemeBuilder
+    // Depreciated: use Install instead
 	AddToScheme        = localSchemeBuilder.AddToScheme
+	Install            = localSchemeBuilder.AddToScheme
 )
 
 func init() {
@@ -97,7 +98,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&{{.}}{},
     {{ end -}}
 	)
-	metav1.AddToGroupVersion(scheme, SchemeGroupVersion)
+    // AddToGroupVersion allows the serialization of client types like ListOptions.
+	v1.AddToGroupVersion(scheme, SchemeGroupVersion)
 	return nil
 }
 `
