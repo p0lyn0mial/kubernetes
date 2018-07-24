@@ -18,18 +18,20 @@ package generators
 
 import (
 	"io"
-	"text/template"
 	"sort"
 
 	clientgentypes "k8s.io/code-generator/cmd/client-gen/types"
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/types"
+	"k8s.io/gengo/namer"
 )
 
 type registerExternalGenerator struct {
 	generator.DefaultGen
+	outputPackage string
 	gv              clientgentypes.GroupVersion
 	typesToGenerate []*types.Type
+	imports          namer.ImportTracker
 }
 
 var _ generator.Generator = &registerExternalGenerator{}
@@ -38,37 +40,47 @@ func (g *registerExternalGenerator) Filter(_ *generator.Context, _ *types.Type) 
 	return false
 }
 
+func (g *registerExternalGenerator) Imports(c *generator.Context) (imports []string) {
+	return g.imports.ImportLines()
+}
+
+func (g *registerExternalGenerator) Namers(_ *generator.Context) namer.NameSystems {
+	return namer.NameSystems{
+		"raw": namer.NewRawNamer(g.outputPackage, g.imports),
+	}
+}
+
 func (g *registerExternalGenerator) Finalize(context *generator.Context, w io.Writer) error {
 	typesToGenerateOnlyNames := make([]string, len(g.typesToGenerate))
 	for index, typeToGenerate := range g.typesToGenerate {
 		typesToGenerateOnlyNames[index] = typeToGenerate.Name.Name
 	}
 
-	registerTemplateParam := struct {
-		clientgentypes.GroupVersion
-		TypesToGenerate []string
-	}{
-		g.gv,
-		typesToGenerateOnlyNames,
-	}
-
 	// sort the list of types to register, so that the generator produces stable output
-	sort.Strings(registerTemplateParam.TypesToGenerate)
+	sort.Strings(typesToGenerateOnlyNames)
 
-	temp := template.Must(template.New("register-template").Parse(registerExternalTypesTemplate))
-	return temp.Execute(w, registerTemplateParam)
+	sw := generator.NewSnippetWriter(w, context, "$", "$")
+	m := map[string]interface{}{
+		"groupName": g.gv.Group,
+		"version": g.gv.Version,
+		"types": typesToGenerateOnlyNames,
+		"addToGroupVersion":         context.Universe.Function(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name: "AddToGroupVersion"}),
+		"groupVersion": context.Universe.Type(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name:"GroupVersion"}),
+	}
+	sw.Do(registerExternalTypesTemplate, m)
+	return sw.Error()
 }
 
 var registerExternalTypesTemplate = `
 // GroupName specifies the group name used to register the objects.
-const GroupName = "{{.Group}}"
+const GroupName = "$.groupName$"
 
 // GroupVersion specifies the group and the version used to register the objects.
-var GroupVersion = v1.GroupVersion{Group: GroupName, Version: "{{.Version}}"}
+var GroupVersion = $.groupVersion|raw${Group: GroupName, Version: "$.version$"}
 
 // SchemeGroupVersion is group version used to register these objects
 // Deprecated: use GroupName instead.
-var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "{{.Version}}"}
+var SchemeGroupVersion = schema.GroupVersion{Group: GroupName, Version: "$.version$"}
 
 // Resource takes an unqualified resource and returns a Group qualified GroupResource
 func Resource(resource string) schema.GroupResource {
@@ -94,12 +106,12 @@ func init() {
 // Adds the list of known types to Scheme.
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(SchemeGroupVersion,
-    {{ range .TypesToGenerate -}}
-		&{{.}}{},
-    {{ end -}}
+    $range .types -$
+        &$.${},
+    $end$
 	)
     // AddToGroupVersion allows the serialization of client types like ListOptions.
-	v1.AddToGroupVersion(scheme, SchemeGroupVersion)
+	$.addToGroupVersion|raw$(scheme, SchemeGroupVersion)
 	return nil
 }
 `

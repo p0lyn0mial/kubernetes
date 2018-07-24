@@ -99,6 +99,8 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 							},
 							gv:              gv,
 							typesToGenerate: typesToRegister,
+							outputPackage: pkg.Path,
+							imports:          generator.NewImportTracker(),
 						},
 					}
 				},
