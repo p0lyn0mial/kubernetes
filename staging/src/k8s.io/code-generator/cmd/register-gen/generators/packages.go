@@ -30,14 +30,18 @@ import (
 	"k8s.io/gengo/types"
 )
 
+// NameSystems returns the name system used by the generators in this package.
 func NameSystems() namer.NameSystems {
 	return namer.NameSystems{}
 }
 
+// DefaultNameSystem returns the default name system for ordering the types to be
+// processed by the generators in this package.
 func DefaultNameSystem() string {
 	return "public"
 }
 
+// Packages makes packages to generate.
 func Packages(context *generator.Context, arguments *args.GeneratorArgs) generator.Packages {
 	boilerplate, err := arguments.LoadGoBoilerplate()
 	if err != nil {
@@ -99,8 +103,8 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 							},
 							gv:              gv,
 							typesToGenerate: typesToRegister,
-							outputPackage: pkg.Path,
-							imports:          generator.NewImportTracker(),
+							outputPackage:   pkg.Path,
+							imports:         generator.NewImportTracker(),
 						},
 					}
 				},

@@ -22,16 +22,16 @@ import (
 
 	clientgentypes "k8s.io/code-generator/cmd/client-gen/types"
 	"k8s.io/gengo/generator"
-	"k8s.io/gengo/types"
 	"k8s.io/gengo/namer"
+	"k8s.io/gengo/types"
 )
 
 type registerExternalGenerator struct {
 	generator.DefaultGen
-	outputPackage string
+	outputPackage   string
 	gv              clientgentypes.GroupVersion
 	typesToGenerate []*types.Type
-	imports          namer.ImportTracker
+	imports         namer.ImportTracker
 }
 
 var _ generator.Generator = &registerExternalGenerator{}
@@ -61,11 +61,11 @@ func (g *registerExternalGenerator) Finalize(context *generator.Context, w io.Wr
 
 	sw := generator.NewSnippetWriter(w, context, "$", "$")
 	m := map[string]interface{}{
-		"groupName": g.gv.Group,
-		"version": g.gv.Version,
-		"types": typesToGenerateOnlyNames,
-		"addToGroupVersion":         context.Universe.Function(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name: "AddToGroupVersion"}),
-		"groupVersion": context.Universe.Type(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name:"GroupVersion"}),
+		"groupName":         g.gv.Group,
+		"version":           g.gv.Version,
+		"types":             typesToGenerateOnlyNames,
+		"addToGroupVersion": context.Universe.Function(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name: "AddToGroupVersion"}),
+		"groupVersion":      context.Universe.Type(types.Name{Package: "k8s.io/apimachinery/pkg/apis/meta/v1", Name: "GroupVersion"}),
 	}
 	sw.Do(registerExternalTypesTemplate, m)
 	return sw.Error()
