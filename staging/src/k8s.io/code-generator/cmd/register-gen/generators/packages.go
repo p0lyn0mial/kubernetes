@@ -51,7 +51,7 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 	packages := generator.Packages{}
 	for _, inputDir := range arguments.InputDirs {
 
-		registerFileName := "register.go"
+		registerFileName := "register.go.BAK"
 		searchPath := path.Join(args.DefaultSourceTree(), inputDir, registerFileName)
 		if _, err := os.Stat(path.Join(searchPath)); err == nil {
 			glog.V(5).Infof("skipping the generation of %s file because %s already exists in the path %s", arguments.OutputFileBaseName, registerFileName, searchPath)
