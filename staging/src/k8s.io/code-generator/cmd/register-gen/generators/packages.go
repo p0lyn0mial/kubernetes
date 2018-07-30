@@ -28,6 +28,7 @@ import (
 	"k8s.io/gengo/generator"
 	"k8s.io/gengo/namer"
 	"k8s.io/gengo/types"
+	"fmt"
 )
 
 // NameSystems returns the name system used by the generators in this package.
@@ -51,16 +52,25 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 	packages := generator.Packages{}
 	for _, inputDir := range arguments.InputDirs {
 
-		registerFileName := "register.go"
+		pkg := context.Universe.Package(inputDir)
+		internal, err := isInternalType(pkg)
+		if err != nil {
+			glog.V(5).Infof("skipping the generation of %s file, due to err %v",arguments.OutputFileBaseName, err)
+			continue
+		}
+		if internal {
+			glog.V(5).Infof("skipping the generation of %s file because %s package contains internal types, note that internal types don't have \"json\" tags", arguments.OutputFileBaseName, pkg.Name)
+			continue
+		}
+		registerFileName := "register.go.BAK"
 		searchPath := path.Join(args.DefaultSourceTree(), inputDir, registerFileName)
 		if _, err := os.Stat(path.Join(searchPath)); err == nil {
 			glog.V(5).Infof("skipping the generation of %s file because %s already exists in the path %s", arguments.OutputFileBaseName, registerFileName, searchPath)
 			continue
 		} else if err != nil && !os.IsNotExist(err) {
-			glog.Fatalf("an error %v has occured while checking if %s exists", err, registerFileName)
+			glog.Fatalf("an error %v has occurred while checking if %s exists", err, registerFileName)
 		}
 
-		pkg := context.Universe.Package(inputDir)
 		gv := clientgentypes.GroupVersion{}
 		{
 			pathParts := strings.Split(pkg.Path, "/")
@@ -113,3 +123,18 @@ func Packages(context *generator.Context, arguments *args.GeneratorArgs) generat
 
 	return packages
 }
+
+// isInternalType determines whether the given package
+// contains the internal types
+func isInternalType(p *types.Package) (bool, error) {
+	for _, t := range p.Types {
+		for _, member := range t.Members {
+			if member.Name == "TypeMeta" {
+				return !strings.Contains(member.Tags, "json"), nil
+			}
+		}
+	}
+	return false, fmt.Errorf("unable to find TypeMeta for any types in package %s", p.Path)
+}
+
+
