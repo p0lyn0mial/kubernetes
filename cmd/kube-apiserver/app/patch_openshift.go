@@ -12,22 +12,10 @@ var OpenShiftKubeAPIServerConfigPatch openshiftkubeapiserver.KubeAPIServerConfig
 
 type KubeAPIServerServerFunc func(server *master.Master) error
 
-func PatchKubeAPIServerConfig(config *genericapiserver.Config, versionedInformers clientgoinformers.SharedInformerFactory, pluginInitializers *[]admission.PluginInitializer) (genericapiserver.DelegationTarget, error) {
+func PatchKubeAPIServerConfig(config *genericapiserver.Config, versionedInformers clientgoinformers.SharedInformerFactory, pluginInitializers *[]admission.PluginInitializer) error {
 	if OpenShiftKubeAPIServerConfigPatch == nil {
-		return genericapiserver.NewEmptyDelegate(), nil
+		return nil
 	}
 
 	return OpenShiftKubeAPIServerConfigPatch(config, versionedInformers, pluginInitializers)
 }
-
-var OpenShiftKubeAPIServerServerPatch KubeAPIServerServerFunc = nil
-
-func PatchKubeAPIServerServer(server *master.Master) error {
-	if OpenShiftKubeAPIServerServerPatch == nil {
-		return nil
-	}
-
-	return OpenShiftKubeAPIServerServerPatch(server)
-}
-
-var StartingDelegate genericapiserver.DelegationTarget = genericapiserver.NewEmptyDelegate()
