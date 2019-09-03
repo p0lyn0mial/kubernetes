@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+
+	e2emetrics "k8s.io/kubernetes/test/e2e/framework/metrics"
 )
 
 // FlakeReport is a struct for managing the flake report.
@@ -88,7 +90,7 @@ func (f *FlakeReport) PrintHumanReadable() string {
 func (f *FlakeReport) PrintJSON() string {
 	f.lock.RLock()
 	defer f.lock.RUnlock()
-	return PrettyPrintJSON(f)
+	return e2emetrics.PrettyPrintJSON(f)
 }
 
 // SummaryKind returns the summary of flake report.

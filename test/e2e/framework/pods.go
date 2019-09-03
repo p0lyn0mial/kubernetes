@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,6 +33,7 @@ import (
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/sysctl"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/gomega"
@@ -109,7 +110,7 @@ func (c *PodClient) CreateEventually(pod *v1.Pod, opts ...interface{}) *v1.Pod {
 // CreateSyncInNamespace creates a new pod according to the framework specifications in the given namespace, and waits for it to start.
 func (c *PodClient) CreateSyncInNamespace(pod *v1.Pod, namespace string) *v1.Pod {
 	p := c.Create(pod)
-	ExpectNoError(WaitForPodNameRunningInNamespace(c.f.ClientSet, p.Name, namespace))
+	ExpectNoError(e2epod.WaitForPodNameRunningInNamespace(c.f.ClientSet, p.Name, namespace))
 	// Get the newest pod after it becomes running, some status may change after pod created, such as pod ip.
 	p, err := c.Get(p.Name, metav1.GetOptions{})
 	ExpectNoError(err)
@@ -173,7 +174,7 @@ func (c *PodClient) DeleteSyncInNamespace(name string, namespace string, options
 	if err != nil && !errors.IsNotFound(err) {
 		Failf("Failed to delete pod %q: %v", name, err)
 	}
-	gomega.Expect(WaitForPodToDisappear(c.f.ClientSet, namespace, name, labels.Everything(),
+	gomega.Expect(e2epod.WaitForPodToDisappear(c.f.ClientSet, namespace, name, labels.Everything(),
 		2*time.Second, timeout)).To(gomega.Succeed(), "wait for pod %q to disappear", name)
 }
 
@@ -217,7 +218,7 @@ func (c *PodClient) mungeSpec(pod *v1.Pod) {
 // TODO(random-liu): Move pod wait function into this file
 func (c *PodClient) WaitForSuccess(name string, timeout time.Duration) {
 	f := c.f
-	gomega.Expect(WaitForPodCondition(f.ClientSet, f.Namespace.Name, name, "success or failure", timeout,
+	gomega.Expect(e2epod.WaitForPodCondition(f.ClientSet, f.Namespace.Name, name, "success or failure", timeout,
 		func(pod *v1.Pod) (bool, error) {
 			switch pod.Status.Phase {
 			case v1.PodFailed:
@@ -234,7 +235,7 @@ func (c *PodClient) WaitForSuccess(name string, timeout time.Duration) {
 // WaitForFailure waits for pod to fail.
 func (c *PodClient) WaitForFailure(name string, timeout time.Duration) {
 	f := c.f
-	gomega.Expect(WaitForPodCondition(f.ClientSet, f.Namespace.Name, name, "success or failure", timeout,
+	gomega.Expect(e2epod.WaitForPodCondition(f.ClientSet, f.Namespace.Name, name, "success or failure", timeout,
 		func(pod *v1.Pod) (bool, error) {
 			switch pod.Status.Phase {
 			case v1.PodFailed:
@@ -246,6 +247,23 @@ func (c *PodClient) WaitForFailure(name string, timeout time.Duration) {
 			}
 		},
 	)).To(gomega.Succeed(), "wait for pod %q to fail", name)
+}
+
+// WaitForFinish waits for pod to finish running, regardless of success or failure.
+func (c *PodClient) WaitForFinish(name string, timeout time.Duration) {
+	f := c.f
+	gomega.Expect(e2epod.WaitForPodCondition(f.ClientSet, f.Namespace.Name, name, "success or failure", timeout,
+		func(pod *v1.Pod) (bool, error) {
+			switch pod.Status.Phase {
+			case v1.PodFailed:
+				return true, nil
+			case v1.PodSucceeded:
+				return true, nil
+			default:
+				return false, nil
+			}
+		},
+	)).To(gomega.Succeed(), "wait for pod %q to finish running", name)
 }
 
 // WaitForErrorEventOrSuccess waits for pod to succeed or an error event for that pod.
@@ -275,7 +293,7 @@ func (c *PodClient) WaitForErrorEventOrSuccess(pod *v1.Pod) (*v1.Event, error) {
 // MatchContainerOutput gets output of a container and match expected regexp in the output.
 func (c *PodClient) MatchContainerOutput(name string, containerName string, expectedRegexp string) error {
 	f := c.f
-	output, err := GetPodLogs(f.ClientSet, f.Namespace.Name, name, containerName)
+	output, err := e2epod.GetPodLogs(f.ClientSet, f.Namespace.Name, name, containerName)
 	if err != nil {
 		return fmt.Errorf("failed to get output for container %q of pod %q", containerName, name)
 	}

@@ -20,12 +20,14 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/onsi/ginkgo"
+	"github.com/onsi/ginkgo"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2elog "k8s.io/kubernetes/test/e2e/framework/log"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	"k8s.io/kubernetes/test/e2e/storage/testpatterns"
 	"k8s.io/kubernetes/test/e2e/storage/utils"
 )
@@ -55,6 +57,10 @@ func (t *multiVolumeTestSuite) getTestSuiteInfo() TestSuiteInfo {
 	return t.tsInfo
 }
 
+func (t *multiVolumeTestSuite) skipRedundantSuite(driver TestDriver, pattern testpatterns.TestPattern) {
+	skipVolTypePatterns(pattern, driver, testpatterns.NewVolTypeMap(testpatterns.PreprovisionedPV))
+}
+
 func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatterns.TestPattern) {
 	type local struct {
 		config      *PerTestConfig
@@ -64,13 +70,16 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		ns        *v1.Namespace
 		driver    TestDriver
 		resources []*genericVolumeTestResource
+
+		intreeOps   opCounts
+		migratedOps opCounts
 	}
 	var (
 		dInfo = driver.GetDriverInfo()
 		l     local
 	)
 
-	BeforeEach(func() {
+	ginkgo.BeforeEach(func() {
 		// Check preconditions.
 		if pattern.VolMode == v1.PersistentVolumeBlock && !dInfo.Capabilities[CapBlock] {
 			framework.Skipf("Driver %s doesn't support %v -- skipping", dInfo.Name, pattern.VolMode)
@@ -91,6 +100,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 
 		// Now do the more expensive test initialization.
 		l.config, l.testCleanup = driver.PrepareTest(f)
+		l.intreeOps, l.migratedOps = getMigrationVolumeOpCounts(f.ClientSet, dInfo.InTreePluginName)
 	}
 
 	cleanup := func() {
@@ -102,6 +112,8 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 			l.testCleanup()
 			l.testCleanup = nil
 		}
+
+		validateMigrationVolumeOpCounts(f.ClientSet, dInfo.InTreePluginName, l.intreeOps, l.migratedOps)
 	}
 
 	// This tests below configuration:
@@ -109,7 +121,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	//      [   node1   ]                           ==>        [   node1   ]
 	//          /    \      <- same volume mode                   /    \
 	//   [volume1]  [volume2]                              [volume1]  [volume2]
-	It("should access to two volumes with the same volume mode and retain data across pod recreation on the same node", func() {
+	ginkgo.It("should access to two volumes with the same volume mode and retain data across pod recreation on the same node", func() {
 		// Currently, multiple volumes are not generally available for pre-provisoined volume,
 		// because containerized storage servers, such as iSCSI and rbd, are just returning
 		// a static volume inside container, not actually creating a new volume per request.
@@ -130,7 +142,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		}
 
 		TestAccessMultipleVolumesAcrossPodRecreation(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, pvcs, true /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, pvcs, true /* sameNode */)
 	})
 
 	// This tests below configuration:
@@ -138,7 +150,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	//      [   node1   ]                           ==>        [   node2   ]
 	//          /    \      <- same volume mode                   /    \
 	//   [volume1]  [volume2]                              [volume1]  [volume2]
-	It("should access to two volumes with the same volume mode and retain data across pod recreation on different node", func() {
+	ginkgo.It("should access to two volumes with the same volume mode and retain data across pod recreation on different node", func() {
 		// Currently, multiple volumes are not generally available for pre-provisoined volume,
 		// because containerized storage servers, such as iSCSI and rbd, are just returning
 		// a static volume inside container, not actually creating a new volume per request.
@@ -168,7 +180,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		}
 
 		TestAccessMultipleVolumesAcrossPodRecreation(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, pvcs, false /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, pvcs, false /* sameNode */)
 	})
 
 	// This tests below configuration (only <block, filesystem> pattern is tested):
@@ -176,7 +188,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	//      [   node1   ]                          ==>        [   node1   ]
 	//          /    \      <- different volume mode             /    \
 	//   [volume1]  [volume2]                              [volume1]  [volume2]
-	It("should access to two volumes with different volume mode and retain data across pod recreation on the same node", func() {
+	ginkgo.It("should access to two volumes with different volume mode and retain data across pod recreation on the same node", func() {
 		if pattern.VolMode == v1.PersistentVolumeFilesystem {
 			framework.Skipf("Filesystem volume case should be covered by block volume case -- skipping")
 		}
@@ -206,7 +218,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		}
 
 		TestAccessMultipleVolumesAcrossPodRecreation(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, pvcs, true /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, pvcs, true /* sameNode */)
 	})
 
 	// This tests below configuration (only <block, filesystem> pattern is tested):
@@ -214,7 +226,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	//      [   node1   ]                          ==>        [   node2   ]
 	//          /    \      <- different volume mode             /    \
 	//   [volume1]  [volume2]                              [volume1]  [volume2]
-	It("should access to two volumes with different volume mode and retain data across pod recreation on different node", func() {
+	ginkgo.It("should access to two volumes with different volume mode and retain data across pod recreation on different node", func() {
 		if pattern.VolMode == v1.PersistentVolumeFilesystem {
 			framework.Skipf("Filesystem volume case should be covered by block volume case -- skipping")
 		}
@@ -253,7 +265,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 		}
 
 		TestAccessMultipleVolumesAcrossPodRecreation(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, pvcs, false /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, pvcs, false /* sameNode */)
 	})
 
 	// This tests below configuration:
@@ -261,7 +273,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	// [   node1   ]
 	//   \      /     <- same volume mode
 	//   [volume1]
-	It("should concurrently access the single volume from pods on the same node", func() {
+	ginkgo.It("should concurrently access the single volume from pods on the same node", func() {
 		init()
 		defer cleanup()
 
@@ -277,7 +289,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 
 		// Test access to the volume from pods on different node
 		TestConcurrentAccessToSingleVolume(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, resource.pvc, numPods, true /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, resource.pvc, numPods, true /* sameNode */)
 	})
 
 	// This tests below configuration:
@@ -285,7 +297,7 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 	// [   node1   ] [   node2   ]
 	//         \      /     <- same volume mode
 	//         [volume1]
-	It("should concurrently access the single volume from pods on different node", func() {
+	ginkgo.It("should concurrently access the single volume from pods on different node", func() {
 		init()
 		defer cleanup()
 
@@ -310,20 +322,20 @@ func (t *multiVolumeTestSuite) defineTests(driver TestDriver, pattern testpatter
 
 		// Test access to the volume from pods on different node
 		TestConcurrentAccessToSingleVolume(l.config.Framework, l.cs, l.ns.Name,
-			framework.NodeSelection{Name: l.config.ClientNodeName}, resource.pvc, numPods, false /* sameNode */)
+			e2epod.NodeSelection{Name: l.config.ClientNodeName}, resource.pvc, numPods, false /* sameNode */)
 	})
 }
 
 // testAccessMultipleVolumes tests access to multiple volumes from single pod on the specified node
 // If readSeedBase > 0, read test are done before write/read test assuming that there is already data written.
 func testAccessMultipleVolumes(f *framework.Framework, cs clientset.Interface, ns string,
-	node framework.NodeSelection, pvcs []*v1.PersistentVolumeClaim, readSeedBase int64, writeSeedBase int64) string {
-	By(fmt.Sprintf("Creating pod on %+v with multiple volumes", node))
-	pod, err := framework.CreateSecPodWithNodeSelection(cs, ns, pvcs,
+	node e2epod.NodeSelection, pvcs []*v1.PersistentVolumeClaim, readSeedBase int64, writeSeedBase int64) string {
+	ginkgo.By(fmt.Sprintf("Creating pod on %+v with multiple volumes", node))
+	pod, err := e2epod.CreateSecPodWithNodeSelection(cs, ns, pvcs, nil,
 		false, "", false, false, framework.SELinuxLabel,
 		nil, node, framework.PodStartTimeout)
 	defer func() {
-		framework.ExpectNoError(framework.DeletePodWithWait(f, cs, pod))
+		framework.ExpectNoError(e2epod.DeletePodWithWait(cs, pod))
 	}()
 	framework.ExpectNoError(err)
 
@@ -332,18 +344,18 @@ func testAccessMultipleVolumes(f *framework.Framework, cs clientset.Interface, n
 		// CreateSecPodWithNodeSelection make volumes accessible via /mnt/volume({i} + 1)
 		index := i + 1
 		path := fmt.Sprintf("/mnt/volume%d", index)
-		By(fmt.Sprintf("Checking if the volume%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
+		ginkgo.By(fmt.Sprintf("Checking if the volume%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
 		utils.CheckVolumeModeOfPath(pod, *pvc.Spec.VolumeMode, path)
 
 		if readSeedBase > 0 {
-			By(fmt.Sprintf("Checking if read from the volume%d works properly", index))
+			ginkgo.By(fmt.Sprintf("Checking if read from the volume%d works properly", index))
 			utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, readSeedBase+int64(i))
 		}
 
-		By(fmt.Sprintf("Checking if write to the volume%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Checking if write to the volume%d works properly", index))
 		utils.CheckWriteToPath(pod, *pvc.Spec.VolumeMode, path, byteLen, writeSeedBase+int64(i))
 
-		By(fmt.Sprintf("Checking if read from the volume%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Checking if read from the volume%d works properly", index))
 		utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, writeSeedBase+int64(i))
 	}
 
@@ -356,7 +368,7 @@ func testAccessMultipleVolumes(f *framework.Framework, cs clientset.Interface, n
 // then recreate pod on the same or different node depending on requiresSameNode,
 // and recheck access to the volumes from the recreated pod
 func TestAccessMultipleVolumesAcrossPodRecreation(f *framework.Framework, cs clientset.Interface, ns string,
-	node framework.NodeSelection, pvcs []*v1.PersistentVolumeClaim, requiresSameNode bool) {
+	node e2epod.NodeSelection, pvcs []*v1.PersistentVolumeClaim, requiresSameNode bool) {
 
 	// No data is written in volume, so passing negative value
 	readSeedBase := int64(-1)
@@ -366,9 +378,9 @@ func TestAccessMultipleVolumesAcrossPodRecreation(f *framework.Framework, cs cli
 
 	// Set affinity depending on requiresSameNode
 	if requiresSameNode {
-		framework.SetAffinity(&node, nodeName)
+		e2epod.SetAffinity(&node, nodeName)
 	} else {
-		framework.SetAntiAffinity(&node, nodeName)
+		e2epod.SetAntiAffinity(&node, nodeName)
 	}
 
 	// Test access to multiple volumes again on the node updated above
@@ -384,20 +396,20 @@ func TestAccessMultipleVolumesAcrossPodRecreation(f *framework.Framework, cs cli
 // pod deletion doesn't affect. Pods are deployed on the same node or different nodes depending on requiresSameNode.
 // Read/write check are done across pod, by check reading both what pod{n-1} and pod{n} wrote from pod{n}.
 func TestConcurrentAccessToSingleVolume(f *framework.Framework, cs clientset.Interface, ns string,
-	node framework.NodeSelection, pvc *v1.PersistentVolumeClaim, numPods int, requiresSameNode bool) {
+	node e2epod.NodeSelection, pvc *v1.PersistentVolumeClaim, numPods int, requiresSameNode bool) {
 
 	var pods []*v1.Pod
 
 	// Create each pod with pvc
 	for i := 0; i < numPods; i++ {
 		index := i + 1
-		By(fmt.Sprintf("Creating pod%d with a volume on %+v", index, node))
-		pod, err := framework.CreateSecPodWithNodeSelection(cs, ns,
-			[]*v1.PersistentVolumeClaim{pvc},
+		ginkgo.By(fmt.Sprintf("Creating pod%d with a volume on %+v", index, node))
+		pod, err := e2epod.CreateSecPodWithNodeSelection(cs, ns,
+			[]*v1.PersistentVolumeClaim{pvc}, nil,
 			false, "", false, false, framework.SELinuxLabel,
 			nil, node, framework.PodStartTimeout)
 		defer func() {
-			framework.ExpectNoError(framework.DeletePodWithWait(f, cs, pod))
+			framework.ExpectNoError(e2epod.DeletePodWithWait(cs, pod))
 		}()
 		framework.ExpectNoError(err)
 		pod, err = cs.CoreV1().Pods(pod.Namespace).Get(pod.Name, metav1.GetOptions{})
@@ -407,9 +419,9 @@ func TestConcurrentAccessToSingleVolume(f *framework.Framework, cs clientset.Int
 
 		// Set affinity depending on requiresSameNode
 		if requiresSameNode {
-			framework.SetAffinity(&node, actualNodeName)
+			e2epod.SetAffinity(&node, actualNodeName)
 		} else {
-			framework.SetAntiAffinity(&node, actualNodeName)
+			e2epod.SetAntiAffinity(&node, actualNodeName)
 		}
 	}
 
@@ -419,11 +431,11 @@ func TestConcurrentAccessToSingleVolume(f *framework.Framework, cs clientset.Int
 	// Check if volume can be accessed from each pod
 	for i, pod := range pods {
 		index := i + 1
-		By(fmt.Sprintf("Checking if the volume in pod%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
+		ginkgo.By(fmt.Sprintf("Checking if the volume in pod%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
 		utils.CheckVolumeModeOfPath(pod, *pvc.Spec.VolumeMode, path)
 
 		if i != 0 {
-			By(fmt.Sprintf("From pod%d, checking if reading the data that pod%d write works properly", index, index-1))
+			ginkgo.By(fmt.Sprintf("From pod%d, checking if reading the data that pod%d write works properly", index, index-1))
 			// For 1st pod, no one has written data yet, so pass the read check
 			utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 		}
@@ -431,43 +443,43 @@ func TestConcurrentAccessToSingleVolume(f *framework.Framework, cs clientset.Int
 		// Update the seed and check if write/read works properly
 		seed = time.Now().UTC().UnixNano()
 
-		By(fmt.Sprintf("Checking if write to the volume in pod%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Checking if write to the volume in pod%d works properly", index))
 		utils.CheckWriteToPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 
-		By(fmt.Sprintf("Checking if read from the volume in pod%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Checking if read from the volume in pod%d works properly", index))
 		utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 	}
 
 	// Delete the last pod and remove from slice of pods
 	if len(pods) < 2 {
-		framework.Failf("Number of pods shouldn't be less than 2, but got %d", len(pods))
+		e2elog.Failf("Number of pods shouldn't be less than 2, but got %d", len(pods))
 	}
 	lastPod := pods[len(pods)-1]
-	framework.ExpectNoError(framework.DeletePodWithWait(f, cs, lastPod))
+	framework.ExpectNoError(e2epod.DeletePodWithWait(cs, lastPod))
 	pods = pods[:len(pods)-1]
 
 	// Recheck if pv can be accessed from each pod after the last pod deletion
 	for i, pod := range pods {
 		index := i + 1
 		// index of pod and index of pvc match, because pods are created above way
-		By(fmt.Sprintf("Rechecking if the volume in pod%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
+		ginkgo.By(fmt.Sprintf("Rechecking if the volume in pod%d exists as expected volume mode (%s)", index, *pvc.Spec.VolumeMode))
 		utils.CheckVolumeModeOfPath(pod, *pvc.Spec.VolumeMode, "/mnt/volume1")
 
 		if i == 0 {
 			// This time there should be data that last pod wrote, for 1st pod
-			By(fmt.Sprintf("From pod%d, rechecking if reading the data that last pod write works properly", index))
+			ginkgo.By(fmt.Sprintf("From pod%d, rechecking if reading the data that last pod write works properly", index))
 		} else {
-			By(fmt.Sprintf("From pod%d, rechecking if reading the data that pod%d write works properly", index, index-1))
+			ginkgo.By(fmt.Sprintf("From pod%d, rechecking if reading the data that pod%d write works properly", index, index-1))
 		}
 		utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 
 		// Update the seed and check if write/read works properly
 		seed = time.Now().UTC().UnixNano()
 
-		By(fmt.Sprintf("Rechecking if write to the volume in pod%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Rechecking if write to the volume in pod%d works properly", index))
 		utils.CheckWriteToPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 
-		By(fmt.Sprintf("Rechecking if read from the volume in pod%d works properly", index))
+		ginkgo.By(fmt.Sprintf("Rechecking if read from the volume in pod%d works properly", index))
 		utils.CheckReadFromPath(pod, *pvc.Spec.VolumeMode, path, byteLen, seed)
 	}
 }

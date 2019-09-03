@@ -27,7 +27,7 @@ import (
 	"time"
 
 	"github.com/onsi/ginkgo"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -38,7 +38,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	clientset "k8s.io/client-go/kubernetes"
 	coreclientset "k8s.io/client-go/kubernetes/typed/core/v1"
+	e2enode "k8s.io/kubernetes/test/e2e/framework/node"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	imageutils "k8s.io/kubernetes/test/utils/image"
+	k8utilnet "k8s.io/utils/net"
 )
 
 const (
@@ -65,9 +68,24 @@ const (
 	maxNetProxyPodsCount = 10
 	// SessionAffinityChecks is number of checks to hit a given set of endpoints when enable session affinity.
 	SessionAffinityChecks = 10
+	// RegexIPv4 is a regex to match IPv4 addresses
+	RegexIPv4 = "(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)\\.(?:\\d+)"
+	// RegexIPv6 is a regex to match IPv6 addresses
+	RegexIPv6 = "(?:(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){6})(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:::(?:(?:(?:[0-9a-fA-F]{1,4})):){5})(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})))?::(?:(?:(?:[0-9a-fA-F]{1,4})):){4})(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,1}(?:(?:[0-9a-fA-F]{1,4})))?::(?:(?:(?:[0-9a-fA-F]{1,4})):){3})(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,2}(?:(?:[0-9a-fA-F]{1,4})))?::(?:(?:(?:[0-9a-fA-F]{1,4})):){2})(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,3}(?:(?:[0-9a-fA-F]{1,4})))?::(?:(?:[0-9a-fA-F]{1,4})):)(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,4}(?:(?:[0-9a-fA-F]{1,4})))?::)(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9]))\\.){3}(?:(?:25[0-5]|(?:[1-9]|1[0-9]|2[0-4])?[0-9])))))))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,5}(?:(?:[0-9a-fA-F]{1,4})))?::)(?:(?:[0-9a-fA-F]{1,4})))|(?:(?:(?:(?:(?:(?:[0-9a-fA-F]{1,4})):){0,6}(?:(?:[0-9a-fA-F]{1,4})))?::))))"
 )
 
-var netexecImageName = imageutils.GetE2EImage(imageutils.Netexec)
+// NetexecImageName is the image name for agnhost.
+var NetexecImageName = imageutils.GetE2EImage(imageutils.Agnhost)
+
+// TranslateIPv4ToIPv6 maps an IPv4 address into a valid IPv6 address
+// adding the well known prefix "0::ffff:" https://tools.ietf.org/html/rfc2765
+// if the ip is IPv4 and the cluster IPFamily is IPv6, otherwise returns the same ip
+func TranslateIPv4ToIPv6(ip string) string {
+	if TestContext.IPFamily == "ipv6" && !k8utilnet.IsIPv6String(ip) && ip != "" {
+		ip = "0::ffff:" + ip
+	}
+	return ip
+}
 
 // NewNetworkingTestConfig creates and sets up a new test config helper.
 func NewNetworkingTestConfig(f *Framework) *NetworkingTestConfig {
@@ -418,10 +436,10 @@ func (config *NetworkingTestConfig) createNetShellPodSpec(podName, hostname stri
 			Containers: []v1.Container{
 				{
 					Name:            "webserver",
-					Image:           netexecImageName,
+					Image:           NetexecImageName,
 					ImagePullPolicy: v1.PullIfNotPresent,
-					Command: []string{
-						"/netexec",
+					Args: []string{
+						"netexec",
 						fmt.Sprintf("--http-port=%d", EndpointHTTPPort),
 						fmt.Sprintf("--udp-port=%d", EndpointUDPPort),
 					},
@@ -462,10 +480,10 @@ func (config *NetworkingTestConfig) createTestPodSpec() *v1.Pod {
 			Containers: []v1.Container{
 				{
 					Name:            "webserver",
-					Image:           netexecImageName,
+					Image:           NetexecImageName,
 					ImagePullPolicy: v1.PullIfNotPresent,
-					Command: []string{
-						"/netexec",
+					Args: []string{
+						"netexec",
 						fmt.Sprintf("--http-port=%d", EndpointHTTPPort),
 						fmt.Sprintf("--udp-port=%d", EndpointUDPPort),
 					},
@@ -520,7 +538,7 @@ func (config *NetworkingTestConfig) DeleteNodePortService() {
 
 func (config *NetworkingTestConfig) createTestPods() {
 	testContainerPod := config.createTestPodSpec()
-	hostTestContainerPod := NewExecPodSpec(config.Namespace, hostTestPodName, config.HostNetwork)
+	hostTestContainerPod := e2epod.NewExecPodSpec(config.Namespace, hostTestPodName, config.HostNetwork)
 
 	config.createPod(testContainerPod)
 	config.createPod(hostTestContainerPod)
@@ -574,7 +592,7 @@ func (config *NetworkingTestConfig) setup(selector map[string]string) {
 	ginkgo.By("Getting node addresses")
 	ExpectNoError(WaitForAllNodesSchedulable(config.f.ClientSet, 10*time.Minute))
 	nodeList := GetReadySchedulableNodesOrDie(config.f.ClientSet)
-	config.ExternalAddrs = NodeAddresses(nodeList, v1.NodeExternalIP)
+	config.ExternalAddrs = e2enode.FirstAddress(nodeList, v1.NodeExternalIP)
 
 	SkipUnlessNodeCountIsAtLeast(2)
 	config.Nodes = nodeList.Items
@@ -597,20 +615,8 @@ func (config *NetworkingTestConfig) setup(selector map[string]string) {
 	if len(config.ExternalAddrs) != 0 {
 		config.NodeIP = config.ExternalAddrs[0]
 	} else {
-		internalAddrs := NodeAddresses(nodeList, v1.NodeInternalIP)
+		internalAddrs := e2enode.FirstAddress(nodeList, v1.NodeInternalIP)
 		config.NodeIP = internalAddrs[0]
-	}
-}
-
-func (config *NetworkingTestConfig) cleanup() {
-	nsClient := config.getNamespacesClient()
-	nsList, err := nsClient.List(metav1.ListOptions{})
-	if err == nil {
-		for _, ns := range nsList.Items {
-			if strings.Contains(ns.Name, config.f.BaseName) && ns.Name != config.Namespace {
-				nsClient.Delete(ns.Name, nil)
-			}
-		}
 	}
 }
 
@@ -666,7 +672,7 @@ func (config *NetworkingTestConfig) DeleteNetProxyPod() {
 	config.getPodClient().Delete(pod.Name, metav1.NewDeleteOptions(0))
 	config.EndpointPods = config.EndpointPods[1:]
 	// wait for pod being deleted.
-	err := WaitForPodToDisappear(config.f.ClientSet, config.Namespace, pod.Name, labels.Everything(), time.Second, wait.ForeverTestTimeout)
+	err := e2epod.WaitForPodToDisappear(config.f.ClientSet, config.Namespace, pod.Name, labels.Everything(), time.Second, wait.ForeverTestTimeout)
 	if err != nil {
 		Failf("Failed to delete %s pod: %v", pod.Name, err)
 	}
@@ -692,10 +698,6 @@ func (config *NetworkingTestConfig) getPodClient() *PodClient {
 
 func (config *NetworkingTestConfig) getServiceClient() coreclientset.ServiceInterface {
 	return config.f.ClientSet.CoreV1().Services(config.Namespace)
-}
-
-func (config *NetworkingTestConfig) getNamespacesClient() coreclientset.NamespaceInterface {
-	return config.f.ClientSet.CoreV1().Namespaces()
 }
 
 // CheckReachabilityFromPod checks reachability from the specified pod.
@@ -1042,7 +1044,7 @@ func TestHitNodesFromOutsideWithCount(externalIP string, httpPort int32, timeout
 // This function executes commands on a node so it will work only for some
 // environments.
 func TestUnderTemporaryNetworkFailure(c clientset.Interface, ns string, node *v1.Node, testFunc func()) {
-	host, err := GetNodeExternalIP(node)
+	host, err := e2enode.GetExternalIP(node)
 	if err != nil {
 		Failf("Error getting node external ip : %v", err)
 	}
@@ -1060,7 +1062,7 @@ func TestUnderTemporaryNetworkFailure(c clientset.Interface, ns string, node *v1
 	}()
 
 	Logf("Waiting %v to ensure node %s is ready before beginning test...", resizeNodeReadyTimeout, node.Name)
-	if !WaitForNodeToBe(c, node.Name, v1.NodeReady, true, resizeNodeReadyTimeout) {
+	if !e2enode.WaitConditionToBe(c, node.Name, v1.NodeReady, true, resizeNodeReadyTimeout) {
 		Failf("Node %s did not become ready within %v", node.Name, resizeNodeReadyTimeout)
 	}
 	for _, masterAddress := range masterAddresses {
@@ -1068,7 +1070,7 @@ func TestUnderTemporaryNetworkFailure(c clientset.Interface, ns string, node *v1
 	}
 
 	Logf("Waiting %v for node %s to be not ready after simulated network failure", resizeNodeNotReadyTimeout, node.Name)
-	if !WaitForNodeToBe(c, node.Name, v1.NodeReady, false, resizeNodeNotReadyTimeout) {
+	if !e2enode.WaitConditionToBe(c, node.Name, v1.NodeReady, false, resizeNodeNotReadyTimeout) {
 		Failf("Node %s did not become not-ready within %v", node.Name, resizeNodeNotReadyTimeout)
 	}
 

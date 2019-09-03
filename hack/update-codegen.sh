@@ -18,7 +18,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
+KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 source "${KUBE_ROOT}/hack/lib/init.sh"
 
 kube::golang::setup_env
@@ -38,7 +38,7 @@ informergen=$(kube::util::find-binary "informer-gen")
 # that generates the set-gen program.
 #
 
-GROUP_VERSIONS=(${KUBE_AVAILABLE_GROUP_VERSIONS})
+IFS=" " read -r -a GROUP_VERSIONS <<< "${KUBE_AVAILABLE_GROUP_VERSIONS}"
 GV_DIRS=()
 for gv in "${GROUP_VERSIONS[@]}"; do
   # add items, but strip off any leading apis/ you find to match command expectations
@@ -49,9 +49,9 @@ for gv in "${GROUP_VERSIONS[@]}"; do
 
 
   # skip groups that aren't being served, clients for these don't matter
-    if [[ " ${KUBE_NONSERVER_GROUP_VERSIONS} " == *" ${gv} "* ]]; then
-      continue
-    fi
+  if [[ " ${KUBE_NONSERVER_GROUP_VERSIONS} " == *" ${gv} "* ]]; then
+    continue
+  fi
 
   GV_DIRS+=("${pkg_dir}")
 done
@@ -60,25 +60,22 @@ GV_DIRS_CSV=$(IFS=',';echo "${GV_DIRS[*]// /,}";IFS=$)
 
 # This can be called with one flag, --verify-only, so it works for both the
 # update- and verify- scripts.
-${clientgen} --output-base "${KUBE_ROOT}/vendor" --output-package="k8s.io/client-go" --clientset-name="kubernetes" --input-base="k8s.io/kubernetes/vendor/k8s.io/api" --input="${GV_DIRS_CSV}" --go-header-file ${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt "$@"
+${clientgen} --output-base "${KUBE_ROOT}/vendor" --output-package="k8s.io/client-go" --clientset-name="kubernetes" --input-base="k8s.io/kubernetes/vendor/k8s.io/api" --input="${GV_DIRS_CSV}" --go-header-file "${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt" "$@"
 
-listergen_external_apis=(
-$(
-  cd ${KUBE_ROOT}/staging/src
-  find k8s.io/api -name types.go | xargs -n1 dirname | sort
-)
+listergen_external_apis=()
+kube::util::read-array listergen_external_apis < <(
+  cd "${KUBE_ROOT}/staging/src"
+  find k8s.io/api -name types.go -print0 | xargs -0 -n1 dirname | sort
 )
 listergen_external_apis_csv=$(IFS=,; echo "${listergen_external_apis[*]}")
-${listergen} --output-base "${KUBE_ROOT}/vendor" --output-package "k8s.io/client-go/listers" --input-dirs "${listergen_external_apis_csv}" --go-header-file ${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt "$@"
+${listergen} --output-base "${KUBE_ROOT}/vendor" --output-package "k8s.io/client-go/listers" --input-dirs "${listergen_external_apis_csv}" --go-header-file "${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt" "$@"
 
-informergen_external_apis=(
-$(
-  cd ${KUBE_ROOT}/staging/src
-  # because client-gen doesn't do policy/v1alpha1, we have to skip it too
-  find k8s.io/api -name types.go | xargs -n1 dirname | sort | grep -v pkg.apis.policy.v1alpha1
+informergen_external_apis=()
+# because client-gen doesn't do policy/v1alpha1, we have to skip it too
+kube::util::read-array informergen_external_apis < <(
+  cd "${KUBE_ROOT}/staging/src"
+  find k8s.io/api -name types.go -print0 | xargs -0 -n1 dirname | sort | grep -v pkg.apis.policy.v1alpha1
 )
-)
-
 informergen_external_apis_csv=$(IFS=,; echo "${informergen_external_apis[*]}")
 
 ${informergen} \
@@ -88,7 +85,7 @@ ${informergen} \
   --input-dirs "${informergen_external_apis_csv}" \
   --versioned-clientset-package k8s.io/client-go/kubernetes \
   --listers-package k8s.io/client-go/listers \
-  --go-header-file ${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt \
+  --go-header-file "${KUBE_ROOT}/hack/boilerplate/boilerplate.generatego.txt" \
   "$@"
 
 # You may add additional calls of code generators like set-gen above.

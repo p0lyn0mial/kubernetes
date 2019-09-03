@@ -31,8 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	core "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/clientcmd"
-	kubeadmapiv1beta1 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta1"
-	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	kubeadmapiv1beta2 "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/v1beta2"
 )
 
 const (
@@ -154,18 +153,13 @@ func TestRunCreateToken(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			bts, err := kubeadmapiv1beta1.NewBootstrapTokenString(tc.token)
+			bts, err := kubeadmapiv1beta2.NewBootstrapTokenString(tc.token)
 			if err != nil && len(tc.token) != 0 { // if tc.token is "" it's okay as it will be generated later at runtime
 				t.Fatalf("token couldn't be parsed for testing: %v", err)
 			}
 
-			cfg := &kubeadmapiv1beta1.InitConfiguration{
-				ClusterConfiguration: kubeadmapiv1beta1.ClusterConfiguration{
-					// KubernetesVersion is not used, but we set this explicitly to avoid
-					// the lookup of the version from the internet when executing LoadOrDefaultInitConfiguration
-					KubernetesVersion: constants.MinimumControlPlaneVersion.String(),
-				},
-				BootstrapTokens: []kubeadmapiv1beta1.BootstrapToken{
+			cfg := &kubeadmapiv1beta2.InitConfiguration{
+				BootstrapTokens: []kubeadmapiv1beta2.BootstrapToken{
 					{
 						Token:  bts,
 						TTL:    &metav1.Duration{Duration: 0},
@@ -176,8 +170,10 @@ func TestRunCreateToken(t *testing.T) {
 			}
 
 			err = RunCreateToken(&buf, fakeClient, "", cfg, tc.printJoin, "")
-			if (err != nil) != tc.expectedError {
-				t.Errorf("Test case %s: RunCreateToken expected error: %v, saw: %v", tc.name, tc.expectedError, (err != nil))
+			if tc.expectedError && err == nil {
+				t.Error("unexpected success")
+			} else if !tc.expectedError && err != nil {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}

@@ -31,7 +31,7 @@ import (
 	"sync"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -46,8 +46,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/restmapper"
 	scaleclient "k8s.io/client-go/scale"
-	aggregatorclient "k8s.io/kube-aggregator/pkg/client/clientset_generated/clientset"
-	"k8s.io/kubernetes/test/e2e/framework/metrics"
+	e2emetrics "k8s.io/kubernetes/test/e2e/framework/metrics"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
+	e2epsp "k8s.io/kubernetes/test/e2e/framework/psp"
 	testutils "k8s.io/kubernetes/test/utils"
 
 	"github.com/onsi/ginkgo"
@@ -75,8 +76,7 @@ type Framework struct {
 	ClientSet                        clientset.Interface
 	KubemarkExternalClusterClientSet clientset.Interface
 
-	AggregatorClient *aggregatorclient.Clientset
-	DynamicClient    dynamic.Interface
+	DynamicClient dynamic.Interface
 
 	ScalesGetter scaleclient.ScalesGetter
 
@@ -112,7 +112,7 @@ type Framework struct {
 	TestSummaries []TestDataSummary
 
 	// Place to keep ClusterAutoscaler metrics from before test in order to compute delta.
-	clusterAutoscalerMetricsBeforeTest metrics.Collection
+	clusterAutoscalerMetricsBeforeTest e2emetrics.Collection
 }
 
 // TestDataSummary is an interface for managing test data.
@@ -162,6 +162,7 @@ func (f *Framework) BeforeEach() {
 	if f.ClientSet == nil {
 		ginkgo.By("Creating a kubernetes client")
 		config, err := LoadConfig()
+		ExpectNoError(err)
 		testDesc := ginkgo.CurrentGinkgoTestDescription()
 		if len(testDesc.ComponentTexts) > 0 {
 			componentTexts := strings.Join(testDesc.ComponentTexts, " ")
@@ -171,7 +172,6 @@ func (f *Framework) BeforeEach() {
 				componentTexts)
 		}
 
-		ExpectNoError(err)
 		config.QPS = f.Options.ClientQPS
 		config.Burst = f.Options.ClientBurst
 		if f.Options.GroupVersion != nil {
@@ -181,8 +181,6 @@ func (f *Framework) BeforeEach() {
 			config.ContentType = TestContext.KubeAPIContentType
 		}
 		f.ClientSet, err = clientset.NewForConfig(config)
-		ExpectNoError(err)
-		f.AggregatorClient, err = aggregatorclient.NewForConfig(config)
 		ExpectNoError(err)
 		f.DynamicClient, err = dynamic.NewForConfig(config)
 		ExpectNoError(err)
@@ -273,7 +271,7 @@ func (f *Framework) BeforeEach() {
 
 	gatherMetricsAfterTest := TestContext.GatherMetricsAfterTest == "true" || TestContext.GatherMetricsAfterTest == "master"
 	if gatherMetricsAfterTest && TestContext.IncludeClusterAutoscalerMetrics {
-		grabber, err := metrics.NewMetricsGrabber(f.ClientSet, f.KubemarkExternalClusterClientSet, !ProviderIs("kubemark"), false, false, false, TestContext.IncludeClusterAutoscalerMetrics)
+		grabber, err := e2emetrics.NewMetricsGrabber(f.ClientSet, f.KubemarkExternalClusterClientSet, !ProviderIs("kubemark"), false, false, false, TestContext.IncludeClusterAutoscalerMetrics)
 		if err != nil {
 			Logf("Failed to create MetricsGrabber (skipping ClusterAutoscaler metrics gathering before test): %v", err)
 		} else {
@@ -365,7 +363,7 @@ func (f *Framework) AfterEach() {
 		ginkgo.By("Gathering metrics")
 		// Grab apiserver, scheduler, controller-manager metrics and (optionally) nodes' kubelet metrics.
 		grabMetricsFromKubelets := TestContext.GatherMetricsAfterTest != "master" && !ProviderIs("kubemark")
-		grabber, err := metrics.NewMetricsGrabber(f.ClientSet, f.KubemarkExternalClusterClientSet, grabMetricsFromKubelets, true, true, true, TestContext.IncludeClusterAutoscalerMetrics)
+		grabber, err := e2emetrics.NewMetricsGrabber(f.ClientSet, f.KubemarkExternalClusterClientSet, grabMetricsFromKubelets, true, true, true, TestContext.IncludeClusterAutoscalerMetrics)
 		if err != nil {
 			Logf("Failed to create MetricsGrabber (skipping metrics gathering): %v", err)
 		} else {
@@ -373,8 +371,8 @@ func (f *Framework) AfterEach() {
 			if err != nil {
 				Logf("MetricsGrabber failed to grab some of the metrics: %v", err)
 			}
-			(*MetricsForE2E)(&received).computeClusterAutoscalerMetricsDelta(f.clusterAutoscalerMetricsBeforeTest)
-			f.TestSummaries = append(f.TestSummaries, (*MetricsForE2E)(&received))
+			(*e2emetrics.ComponentCollection)(&received).ComputeClusterAutoscalerMetricsDelta(f.clusterAutoscalerMetricsBeforeTest)
+			f.TestSummaries = append(f.TestSummaries, (*e2emetrics.ComponentCollection)(&received))
 		}
 	}
 
@@ -408,7 +406,7 @@ func (f *Framework) CreateNamespace(baseName string, labels map[string]string) (
 	f.AddNamespacesToDelete(ns)
 
 	if err == nil && !f.SkipPrivilegedPSPBinding {
-		createPrivilegedPSPBinding(f, ns.Name)
+		e2epsp.CreatePrivilegedPSPBinding(f.ClientSet, ns.Name)
 	}
 
 	return ns, err
@@ -434,34 +432,34 @@ func (f *Framework) AddNamespacesToDelete(namespaces ...*v1.Namespace) {
 
 // WaitForPodTerminated waits for the pod to be terminated with the given reason.
 func (f *Framework) WaitForPodTerminated(podName, reason string) error {
-	return waitForPodTerminatedInNamespace(f.ClientSet, podName, reason, f.Namespace.Name)
+	return e2epod.WaitForPodTerminatedInNamespace(f.ClientSet, podName, reason, f.Namespace.Name)
 }
 
 // WaitForPodNotFound waits for the pod to be completely terminated (not "Get-able").
 func (f *Framework) WaitForPodNotFound(podName string, timeout time.Duration) error {
-	return waitForPodNotFoundInNamespace(f.ClientSet, podName, f.Namespace.Name, timeout)
+	return e2epod.WaitForPodNotFoundInNamespace(f.ClientSet, podName, f.Namespace.Name, timeout)
 }
 
 // WaitForPodRunning waits for the pod to run in the namespace.
 func (f *Framework) WaitForPodRunning(podName string) error {
-	return WaitForPodNameRunningInNamespace(f.ClientSet, podName, f.Namespace.Name)
+	return e2epod.WaitForPodNameRunningInNamespace(f.ClientSet, podName, f.Namespace.Name)
 }
 
 // WaitForPodReady waits for the pod to flip to ready in the namespace.
 func (f *Framework) WaitForPodReady(podName string) error {
-	return waitTimeoutForPodReadyInNamespace(f.ClientSet, podName, f.Namespace.Name, PodStartTimeout)
+	return e2epod.WaitTimeoutForPodReadyInNamespace(f.ClientSet, podName, f.Namespace.Name, PodStartTimeout)
 }
 
 // WaitForPodRunningSlow waits for the pod to run in the namespace.
 // It has a longer timeout then WaitForPodRunning (util.slowPodStartTimeout).
 func (f *Framework) WaitForPodRunningSlow(podName string) error {
-	return waitForPodRunningInNamespaceSlow(f.ClientSet, podName, f.Namespace.Name)
+	return e2epod.WaitForPodRunningInNamespaceSlow(f.ClientSet, podName, f.Namespace.Name)
 }
 
 // WaitForPodNoLongerRunning waits for the pod to no longer be running in the namespace, for either
 // success or failure.
 func (f *Framework) WaitForPodNoLongerRunning(podName string) error {
-	return WaitForPodNoLongerRunningInNamespace(f.ClientSet, podName, f.Namespace.Name)
+	return e2epod.WaitForPodNoLongerRunningInNamespace(f.ClientSet, podName, f.Namespace.Name)
 }
 
 // TestContainerOutput runs the given pod in the given namespace and waits
@@ -570,7 +568,7 @@ func (f *Framework) CreateServiceForSimpleApp(contPort, svcPort int, appName str
 // CreatePodsPerNodeForSimpleApp creates pods w/ labels.  Useful for tests which make a bunch of pods w/o any networking.
 func (f *Framework) CreatePodsPerNodeForSimpleApp(appName string, podSpec func(n v1.Node) v1.PodSpec, maxCount int) map[string]string {
 	nodes := GetReadySchedulableNodesOrDie(f.ClientSet)
-	labels := map[string]string{
+	podLabels := map[string]string{
 		"app": appName + "-pod",
 	}
 	for i, node := range nodes.Items {
@@ -580,14 +578,14 @@ func (f *Framework) CreatePodsPerNodeForSimpleApp(appName string, podSpec func(n
 			_, err := f.ClientSet.CoreV1().Pods(f.Namespace.Name).Create(&v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:   fmt.Sprintf(appName+"-pod-%v", i),
-					Labels: labels,
+					Labels: podLabels,
 				},
 				Spec: podSpec(node),
 			})
 			ExpectNoError(err)
 		}
 	}
-	return labels
+	return podLabels
 }
 
 // KubeUser is a struct for managing kubernetes user info.
@@ -876,7 +874,7 @@ func (cl *ClusterVerification) ForEach(podFunc func(v1.Pod)) error {
 }
 
 // GetLogToFileFunc is a convenience function that returns a function that have the same interface as
-// Logf, but writes to a specified file.
+// e2elog.Logf, but writes to a specified file.
 func GetLogToFileFunc(file *os.File) func(format string, args ...interface{}) {
 	return func(format string, args ...interface{}) {
 		writer := bufio.NewWriter(file)
@@ -885,4 +883,19 @@ func GetLogToFileFunc(file *os.File) func(format string, args ...interface{}) {
 		}
 		writer.Flush()
 	}
+}
+
+const (
+	// preconfiguredRuntimeHandler is the name of the runtime handler that is expected to be
+	// preconfigured in the test environment.
+	preconfiguredRuntimeHandler = "test-handler"
+)
+
+// PreconfiguredRuntimeClassHandler returns configured runtime handler.
+func PreconfiguredRuntimeClassHandler() string {
+	if TestContext.ContainerRuntime == "docker" {
+		return TestContext.ContainerRuntime
+	}
+
+	return preconfiguredRuntimeHandler
 }

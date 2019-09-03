@@ -267,7 +267,7 @@ func (dsc *DaemonSetsController) Run(workers int, stopCh <-chan struct{}) {
 	klog.Infof("Starting daemon sets controller")
 	defer klog.Infof("Shutting down daemon sets controller")
 
-	if !controller.WaitForCacheSync("daemon sets", stopCh, dsc.podStoreSynced, dsc.nodeStoreSynced, dsc.historyStoreSynced, dsc.dsStoreSynced) {
+	if !cache.WaitForNamedCacheSync("daemon sets", stopCh, dsc.podStoreSynced, dsc.nodeStoreSynced, dsc.historyStoreSynced, dsc.dsStoreSynced) {
 		return
 	}
 
@@ -532,6 +532,15 @@ func (dsc *DaemonSetsController) updatePod(old, cur interface{}) {
 	if curPod.ResourceVersion == oldPod.ResourceVersion {
 		// Periodic resync will send update events for all known pods.
 		// Two different versions of the same pod will always have different RVs.
+		return
+	}
+
+	if curPod.DeletionTimestamp != nil {
+		// when a pod is deleted gracefully its deletion timestamp is first modified to reflect a grace period,
+		// and after such time has passed, the kubelet actually deletes it from the store. We receive an update
+		// for modification of the deletion timestamp and expect an ds to create more replicas asap, not wait
+		// until the kubelet actually deletes the pod.
+		dsc.deletePod(curPod)
 		return
 	}
 
@@ -853,13 +862,12 @@ func (dsc *DaemonSetsController) resolveControllerRef(namespace string, controll
 // podsShouldBeOnNode figures out the DaemonSet pods to be created and deleted on the given node:
 //   - nodesNeedingDaemonPods: the pods need to start on the node
 //   - podsToDelete: the Pods need to be deleted on the node
-//   - failedPodsObserved: the number of failed pods on node
 //   - err: unexpected error
 func (dsc *DaemonSetsController) podsShouldBeOnNode(
 	node *v1.Node,
 	nodeToDaemonPods map[string][]*v1.Pod,
 	ds *apps.DaemonSet,
-) (nodesNeedingDaemonPods, podsToDelete []string, failedPodsObserved int, err error) {
+) (nodesNeedingDaemonPods, podsToDelete []string, err error) {
 
 	wantToRun, shouldSchedule, shouldContinueRunning, err := dsc.nodeShouldRunDaemonPod(node, ds)
 	if err != nil {
@@ -867,7 +875,11 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 	}
 
 	daemonPods, exists := nodeToDaemonPods[node.Name]
-	dsKey, _ := cache.MetaNamespaceKeyFunc(ds)
+	dsKey, err := cache.MetaNamespaceKeyFunc(ds)
+	if err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
 
 	dsc.removeSuspendedDaemonPods(node.Name, dsKey)
 
@@ -887,8 +899,6 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 				continue
 			}
 			if pod.Status.Phase == v1.PodFailed {
-				failedPodsObserved++
-
 				// This is a critical place where DS is often fighting with kubelet that rejects pods.
 				// We need to avoid hot looping and backoff.
 				backoffKey := failedPodsBackoffKey(ds, node.Name)
@@ -925,11 +935,14 @@ func (dsc *DaemonSetsController) podsShouldBeOnNode(
 	case !shouldContinueRunning && exists:
 		// If daemon pod isn't supposed to run on node, but it is, delete all daemon pods on node.
 		for _, pod := range daemonPods {
+			if pod.DeletionTimestamp != nil {
+				continue
+			}
 			podsToDelete = append(podsToDelete, pod.Name)
 		}
 	}
 
-	return nodesNeedingDaemonPods, podsToDelete, failedPodsObserved, nil
+	return nodesNeedingDaemonPods, podsToDelete, nil
 }
 
 // manage manages the scheduling and running of Pods of ds on nodes.
@@ -946,9 +959,8 @@ func (dsc *DaemonSetsController) manage(ds *apps.DaemonSet, nodeList []*v1.Node,
 	// For each node, if the node is running the daemon pod but isn't supposed to, kill the daemon
 	// pod. If the node is supposed to run the daemon pod, but isn't, create the daemon pod on the node.
 	var nodesNeedingDaemonPods, podsToDelete []string
-	var failedPodsObserved int
 	for _, node := range nodeList {
-		nodesNeedingDaemonPodsOnNode, podsToDeleteOnNode, failedPodsObservedOnNode, err := dsc.podsShouldBeOnNode(
+		nodesNeedingDaemonPodsOnNode, podsToDeleteOnNode, err := dsc.podsShouldBeOnNode(
 			node, nodeToDaemonPods, ds)
 
 		if err != nil {
@@ -957,7 +969,6 @@ func (dsc *DaemonSetsController) manage(ds *apps.DaemonSet, nodeList []*v1.Node,
 
 		nodesNeedingDaemonPods = append(nodesNeedingDaemonPods, nodesNeedingDaemonPodsOnNode...)
 		podsToDelete = append(podsToDelete, podsToDeleteOnNode...)
-		failedPodsObserved += failedPodsObservedOnNode
 	}
 
 	// Remove unscheduled pods assigned to not existing nodes when daemonset pods are scheduled by scheduler.
@@ -969,11 +980,6 @@ func (dsc *DaemonSetsController) manage(ds *apps.DaemonSet, nodeList []*v1.Node,
 	// Label new pods using the hash label value of the current history when creating them
 	if err = dsc.syncNodes(ds, podsToDelete, nodesNeedingDaemonPods, hash); err != nil {
 		return err
-	}
-
-	// Throw an error when the daemon pods fail, to use ratelimiter to prevent kill-recreate hot loop
-	if failedPodsObserved > 0 {
-		return fmt.Errorf("deleted %d failed pods of DaemonSet %s/%s", failedPodsObserved, ds.Namespace, ds.Name)
 	}
 
 	return nil
@@ -1067,12 +1073,10 @@ func (dsc *DaemonSetsController) syncNodes(ds *apps.DaemonSet, podsToDelete, nod
 		}
 		createWait.Wait()
 		// any skipped pods that we never attempted to start shouldn't be expected.
-		skippedPods := createDiff - batchSize
+		skippedPods := createDiff - (batchSize + pos)
 		if errorCount < len(errCh) && skippedPods > 0 {
 			klog.V(2).Infof("Slow-start failure. Skipping creation of %d pods, decrementing expectations for set %q/%q", skippedPods, ds.Namespace, ds.Name)
-			for i := 0; i < skippedPods; i++ {
-				dsc.expectations.CreationObserved(dsKey)
-			}
+			dsc.expectations.LowerExpectations(dsKey, skippedPods, 0)
 			// The skipped pods will be retried later. The next controller resync will
 			// retry the slow start process.
 			break
@@ -1198,6 +1202,10 @@ func (dsc *DaemonSetsController) updateDaemonSetStatus(ds *apps.DaemonSet, nodeL
 		return fmt.Errorf("error storing status for daemon set %#v: %v", ds, err)
 	}
 
+	// Resync the DaemonSet after MinReadySeconds as a last line of defense to guard against clock-skew.
+	if ds.Spec.MinReadySeconds > 0 && numberReady != numberAvailable {
+		dsc.enqueueDaemonSetAfter(ds, time.Duration(ds.Spec.MinReadySeconds)*time.Second)
+	}
 	return nil
 }
 

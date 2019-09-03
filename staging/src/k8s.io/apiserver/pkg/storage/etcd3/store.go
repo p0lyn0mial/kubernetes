@@ -36,10 +36,11 @@ import (
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
-	"k8s.io/apiserver/pkg/storage/etcd"
-	"k8s.io/apiserver/pkg/storage/etcd/metrics"
+	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/value"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utiltrace "k8s.io/utils/trace"
 )
 
@@ -87,7 +88,7 @@ func New(c *clientv3.Client, codec runtime.Codec, prefix string, transformer val
 }
 
 func newStore(c *clientv3.Client, pagingEnabled bool, codec runtime.Codec, prefix string, transformer value.Transformer) *store {
-	versioner := etcd.APIObjectVersioner{}
+	versioner := APIObjectVersioner{}
 	result := &store{
 		client:        c,
 		codec:         codec,
@@ -181,44 +182,16 @@ func (s *store) Create(ctx context.Context, key string, obj, out runtime.Object,
 }
 
 // Delete implements storage.Interface.Delete.
-func (s *store) Delete(ctx context.Context, key string, out runtime.Object, preconditions *storage.Preconditions) error {
+func (s *store) Delete(ctx context.Context, key string, out runtime.Object, preconditions *storage.Preconditions, validateDeletion storage.ValidateObjectFunc) error {
 	v, err := conversion.EnforcePtr(out)
 	if err != nil {
-		panic("unable to convert output object to pointer")
+		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
 	key = path.Join(s.pathPrefix, key)
-	if preconditions == nil {
-		return s.unconditionalDelete(ctx, key, out)
-	}
-	return s.conditionalDelete(ctx, key, out, v, preconditions)
+	return s.conditionalDelete(ctx, key, out, v, preconditions, validateDeletion)
 }
 
-func (s *store) unconditionalDelete(ctx context.Context, key string, out runtime.Object) error {
-	// We need to do get and delete in single transaction in order to
-	// know the value and revision before deleting it.
-	startTime := time.Now()
-	txnResp, err := s.client.KV.Txn(ctx).If().Then(
-		clientv3.OpGet(key),
-		clientv3.OpDelete(key),
-	).Commit()
-	metrics.RecordEtcdRequestLatency("delete", getTypeName(out), startTime)
-	if err != nil {
-		return err
-	}
-	getResp := txnResp.Responses[0].GetResponseRange()
-	if len(getResp.Kvs) == 0 {
-		return storage.NewKeyNotFoundError(key, 0)
-	}
-
-	kv := getResp.Kvs[0]
-	data, _, err := s.transformer.TransformFromStorage(kv.Value, authenticatedDataString(key))
-	if err != nil {
-		return storage.NewInternalError(err.Error())
-	}
-	return decode(s.codec, s.versioner, data, out, kv.ModRevision)
-}
-
-func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.Object, v reflect.Value, preconditions *storage.Preconditions) error {
+func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.Object, v reflect.Value, preconditions *storage.Preconditions, validateDeletion storage.ValidateObjectFunc) error {
 	startTime := time.Now()
 	getResp, err := s.client.KV.Get(ctx, key)
 	metrics.RecordEtcdRequestLatency("get", getTypeName(out), startTime)
@@ -230,7 +203,12 @@ func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.O
 		if err != nil {
 			return err
 		}
-		if err := preconditions.Check(key, origState.obj); err != nil {
+		if preconditions != nil {
+			if err := preconditions.Check(key, origState.obj); err != nil {
+				return err
+			}
+		}
+		if err := validateDeletion(ctx, origState.obj); err != nil {
 			return err
 		}
 		startTime := time.Now()
@@ -258,12 +236,12 @@ func (s *store) conditionalDelete(ctx context.Context, key string, out runtime.O
 func (s *store) GuaranteedUpdate(
 	ctx context.Context, key string, out runtime.Object, ignoreNotFound bool,
 	preconditions *storage.Preconditions, tryUpdate storage.UpdateFunc, suggestion ...runtime.Object) error {
-	trace := utiltrace.New(fmt.Sprintf("GuaranteedUpdate etcd3: %s", getTypeName(out)))
+	trace := utiltrace.New("GuaranteedUpdate etcd3", utiltrace.Field{"type", getTypeName(out)})
 	defer trace.LogIfLong(500 * time.Millisecond)
 
 	v, err := conversion.EnforcePtr(out)
 	if err != nil {
-		panic("unable to convert output object to pointer")
+		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
 	key = path.Join(s.pathPrefix, key)
 
@@ -301,19 +279,20 @@ func (s *store) GuaranteedUpdate(
 
 		ret, ttl, err := s.updateState(origState, tryUpdate)
 		if err != nil {
-			// It's possible we were working with stale data
-			if mustCheckData && apierrors.IsConflict(err) {
-				// Actually fetch
-				origState, err = getCurrentState()
-				if err != nil {
-					return err
-				}
-				mustCheckData = false
-				// Retry
-				continue
+			// If our data is already up to date, return the error
+			if !mustCheckData {
+				return err
 			}
 
-			return err
+			// It's possible we were working with stale data
+			// Actually fetch
+			origState, err = getCurrentState()
+			if err != nil {
+				return err
+			}
+			mustCheckData = false
+			// Retry
+			continue
 		}
 
 		data, err := runtime.Encode(s.codec, ret)
@@ -384,7 +363,11 @@ func (s *store) GuaranteedUpdate(
 
 // GetToList implements storage.Interface.GetToList.
 func (s *store) GetToList(ctx context.Context, key string, resourceVersion string, pred storage.SelectionPredicate, listObj runtime.Object) error {
-	trace := utiltrace.New(fmt.Sprintf("GetToList etcd3: key=%v, resourceVersion=%s, limit: %d, continue: %s", key, resourceVersion, pred.Limit, pred.Continue))
+	trace := utiltrace.New("GetToList etcd3",
+		utiltrace.Field{"key", key},
+		utiltrace.Field{"resourceVersion", resourceVersion},
+		utiltrace.Field{"limit", pred.Limit},
+		utiltrace.Field{"continue", pred.Continue})
 	defer trace.LogIfLong(500 * time.Millisecond)
 	listPtr, err := meta.GetItemsPtr(listObj)
 	if err != nil {
@@ -392,7 +375,7 @@ func (s *store) GetToList(ctx context.Context, key string, resourceVersion strin
 	}
 	v, err := conversion.EnforcePtr(listPtr)
 	if err != nil || v.Kind() != reflect.Slice {
-		panic("need ptr to slice")
+		return fmt.Errorf("need ptr to slice: %v", err)
 	}
 
 	key = path.Join(s.pathPrefix, key)
@@ -413,7 +396,7 @@ func (s *store) GetToList(ctx context.Context, key string, resourceVersion strin
 		}
 	}
 	// update version with cluster level revision
-	return s.versioner.UpdateList(listObj, uint64(getResp.Header.Revision), "")
+	return s.versioner.UpdateList(listObj, uint64(getResp.Header.Revision), "", nil)
 }
 
 func (s *store) Count(key string) (int64, error) {
@@ -489,7 +472,11 @@ func encodeContinue(key, keyPrefix string, resourceVersion int64) (string, error
 
 // List implements storage.Interface.List.
 func (s *store) List(ctx context.Context, key, resourceVersion string, pred storage.SelectionPredicate, listObj runtime.Object) error {
-	trace := utiltrace.New(fmt.Sprintf("List etcd3: key=%v, resourceVersion=%s, limit: %d, continue: %s", key, resourceVersion, pred.Limit, pred.Continue))
+	trace := utiltrace.New("List etcd3",
+		utiltrace.Field{"key", key},
+		utiltrace.Field{"resourceVersion", resourceVersion},
+		utiltrace.Field{"limit", pred.Limit},
+		utiltrace.Field{"continue", pred.Continue})
 	defer trace.LogIfLong(500 * time.Millisecond)
 	listPtr, err := meta.GetItemsPtr(listObj)
 	if err != nil {
@@ -497,7 +484,7 @@ func (s *store) List(ctx context.Context, key, resourceVersion string, pred stor
 	}
 	v, err := conversion.EnforcePtr(listPtr)
 	if err != nil || v.Kind() != reflect.Slice {
-		panic("need ptr to slice")
+		return fmt.Errorf("need ptr to slice: %v", err)
 	}
 
 	if s.pathPrefix != "" {
@@ -576,9 +563,10 @@ func (s *store) List(ctx context.Context, key, resourceVersion string, pred stor
 	// loop until we have filled the requested limit from etcd or there are no more results
 	var lastKey []byte
 	var hasMore bool
+	var getResp *clientv3.GetResponse
 	for {
 		startTime := time.Now()
-		getResp, err := s.client.KV.Get(ctx, key, options...)
+		getResp, err = s.client.KV.Get(ctx, key, options...)
 		metrics.RecordEtcdRequestLatency("list", getTypeName(listPtr), startTime)
 		if err != nil {
 			return interpretListError(err, len(pred.Continue) > 0, continueKey, keyPrefix)
@@ -639,11 +627,21 @@ func (s *store) List(ctx context.Context, key, resourceVersion string, pred stor
 		if err != nil {
 			return err
 		}
-		return s.versioner.UpdateList(listObj, uint64(returnedRV), next)
+		var remainingItemCount *int64
+		// getResp.Count counts in objects that do not match the pred.
+		// Instead of returning inaccurate count for non-empty selectors, we return nil.
+		// Only set remainingItemCount if the predicate is empty.
+		if utilfeature.DefaultFeatureGate.Enabled(features.RemainingItemCount) {
+			if pred.Empty() {
+				c := int64(getResp.Count - pred.Limit)
+				remainingItemCount = &c
+			}
+		}
+		return s.versioner.UpdateList(listObj, uint64(returnedRV), next, remainingItemCount)
 	}
 
 	// no continuation
-	return s.versioner.UpdateList(listObj, uint64(returnedRV), "")
+	return s.versioner.UpdateList(listObj, uint64(returnedRV), "", nil)
 }
 
 // growSlice takes a slice value and grows its capacity up
@@ -698,9 +696,15 @@ func (s *store) watch(ctx context.Context, key string, rv string, pred storage.S
 
 func (s *store) getState(getResp *clientv3.GetResponse, key string, v reflect.Value, ignoreNotFound bool) (*objState, error) {
 	state := &objState{
-		obj:  reflect.New(v.Type()).Interface().(runtime.Object),
 		meta: &storage.ResponseMeta{},
 	}
+
+	if u, ok := v.Addr().Interface().(runtime.Unstructured); ok {
+		state.obj = u.NewEmptyInstance()
+	} else {
+		state.obj = reflect.New(v.Type()).Interface().(runtime.Object)
+	}
+
 	if len(getResp.Kvs) == 0 {
 		if !ignoreNotFound {
 			return nil, storage.NewKeyNotFoundError(key, 0)
@@ -746,7 +750,9 @@ func (s *store) getStateFromObject(obj runtime.Object) (*objState, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.versioner.UpdateObject(state.obj, uint64(rv))
+	if err := s.versioner.UpdateObject(state.obj, uint64(rv)); err != nil {
+		klog.Errorf("failed to update object version: %v", err)
+	}
 	return state, nil
 }
 
@@ -783,14 +789,16 @@ func (s *store) ttlOpts(ctx context.Context, ttl int64) ([]clientv3.OpOption, er
 // On success, objPtr would be set to the object.
 func decode(codec runtime.Codec, versioner storage.Versioner, value []byte, objPtr runtime.Object, rev int64) error {
 	if _, err := conversion.EnforcePtr(objPtr); err != nil {
-		panic("unable to convert output object to pointer")
+		return fmt.Errorf("unable to convert output object to pointer: %v", err)
 	}
 	_, _, err := codec.Decode(value, nil, objPtr)
 	if err != nil {
 		return err
 	}
 	// being unable to set the version does not prevent the object from being extracted
-	versioner.UpdateObject(objPtr, uint64(rev))
+	if err := versioner.UpdateObject(objPtr, uint64(rev)); err != nil {
+		klog.Errorf("failed to update object version: %v", err)
+	}
 	return nil
 }
 
@@ -801,7 +809,9 @@ func appendListItem(v reflect.Value, data []byte, rev uint64, pred storage.Selec
 		return err
 	}
 	// being unable to set the version does not prevent the object from being extracted
-	versioner.UpdateObject(obj, rev)
+	if err := versioner.UpdateObject(obj, rev); err != nil {
+		klog.Errorf("failed to update object version: %v", err)
+	}
 	if matched, err := pred.Matches(obj); err == nil && matched {
 		v.Set(reflect.Append(v, reflect.ValueOf(obj).Elem()))
 	}

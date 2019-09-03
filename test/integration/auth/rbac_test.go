@@ -42,12 +42,11 @@ import (
 	genericfeatures "k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/registry/generic"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilfeaturetesting "k8s.io/apiserver/pkg/util/feature/testing"
 	clientset "k8s.io/client-go/kubernetes"
-	externalclientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	watchtools "k8s.io/client-go/tools/watch"
 	"k8s.io/client-go/transport"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/api/testapi"
@@ -74,10 +73,10 @@ func clientForToken(user string) *http.Client {
 	}
 }
 
-func clientsetForToken(user string, config *restclient.Config) (clientset.Interface, externalclientset.Interface) {
+func clientsetForToken(user string, config *restclient.Config) (clientset.Interface, clientset.Interface) {
 	configCopy := *config
 	configCopy.BearerToken = user
-	return clientset.NewForConfigOrDie(&configCopy), externalclientset.NewForConfigOrDie(&configCopy)
+	return clientset.NewForConfigOrDie(&configCopy), clientset.NewForConfigOrDie(&configCopy)
 }
 
 func crdClientsetForToken(user string, config *restclient.Config) apiextensionsclient.Interface {
@@ -98,12 +97,28 @@ func (getter *testRESTOptionsGetter) GetRESTOptions(resource schema.GroupResourc
 	return generic.RESTOptions{StorageConfig: storageConfig, Decorator: generic.UndecoratedStorage, ResourcePrefix: resource.Resource}, nil
 }
 
-func newRBACAuthorizer(config *master.Config) authorizer.Authorizer {
+func newRBACAuthorizer(t *testing.T, config *master.Config) authorizer.Authorizer {
 	optsGetter := &testRESTOptionsGetter{config}
-	roleRegistry := role.AuthorizerAdapter{Registry: role.NewRegistry(rolestore.NewREST(optsGetter))}
-	roleBindingRegistry := rolebinding.AuthorizerAdapter{Registry: rolebinding.NewRegistry(rolebindingstore.NewREST(optsGetter))}
-	clusterRoleRegistry := clusterrole.AuthorizerAdapter{Registry: clusterrole.NewRegistry(clusterrolestore.NewREST(optsGetter))}
-	clusterRoleBindingRegistry := clusterrolebinding.AuthorizerAdapter{Registry: clusterrolebinding.NewRegistry(clusterrolebindingstore.NewREST(optsGetter))}
+	roleRest, err := rolestore.NewREST(optsGetter)
+	if err != nil {
+		t.Fatalf("unexpected error from REST storage: %v", err)
+	}
+	roleRegistry := role.AuthorizerAdapter{Registry: role.NewRegistry(roleRest)}
+	rolebindingRest, err := rolebindingstore.NewREST(optsGetter)
+	if err != nil {
+		t.Fatalf("unexpected error from REST storage: %v", err)
+	}
+	roleBindingRegistry := rolebinding.AuthorizerAdapter{Registry: rolebinding.NewRegistry(rolebindingRest)}
+	clusterroleRest, err := clusterrolestore.NewREST(optsGetter)
+	if err != nil {
+		t.Fatalf("unexpected error from REST storage: %v", err)
+	}
+	clusterRoleRegistry := clusterrole.AuthorizerAdapter{Registry: clusterrole.NewRegistry(clusterroleRest)}
+	clusterrolebindingRest, err := clusterrolebindingstore.NewREST(optsGetter)
+	if err != nil {
+		t.Fatalf("unexpected error from REST storage: %v", err)
+	}
+	clusterRoleBindingRegistry := clusterrolebinding.AuthorizerAdapter{Registry: clusterrolebinding.NewRegistry(clusterrolebindingRest)}
 	return rbac.New(roleRegistry, roleBindingRegistry, clusterRoleRegistry, clusterRoleBindingRegistry)
 }
 
@@ -289,7 +304,7 @@ var (
 )
 
 func TestRBAC(t *testing.T) {
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ServerSideApply, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, genericfeatures.ServerSideApply, true)()
 
 	superUser := "admin/system:masters"
 
@@ -516,7 +531,7 @@ func TestRBAC(t *testing.T) {
 	for i, tc := range tests {
 		// Create an API Server.
 		masterConfig := framework.NewIntegrationTestMasterConfig()
-		masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(masterConfig)
+		masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(t, masterConfig)
 		masterConfig.GenericConfig.Authentication.Authenticator = bearertoken.New(tokenfile.New(map[string]*user.DefaultInfo{
 			superUser:                          {Name: "admin", Groups: []string{"system:masters"}},
 			"any-rolebinding-writer":           {Name: "any-rolebinding-writer"},
@@ -630,7 +645,7 @@ func TestBootstrapping(t *testing.T) {
 	superUser := "admin/system:masters"
 
 	masterConfig := framework.NewIntegrationTestMasterConfig()
-	masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(masterConfig)
+	masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(t, masterConfig)
 	masterConfig.GenericConfig.Authentication.Authenticator = bearertoken.New(tokenfile.New(map[string]*user.DefaultInfo{
 		superUser: {Name: "admin", Groups: []string{"system:masters"}},
 	}))
@@ -691,7 +706,7 @@ func TestDiscoveryUpgradeBootstrapping(t *testing.T) {
 	superUser := "admin/system:masters"
 
 	masterConfig := framework.NewIntegrationTestMasterConfig()
-	masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(masterConfig)
+	masterConfig.GenericConfig.Authorization.Authorizer = newRBACAuthorizer(t, masterConfig)
 	masterConfig.GenericConfig.Authentication.Authenticator = bearertoken.New(tokenfile.New(map[string]*user.DefaultInfo{
 		superUser: {Name: "admin", Groups: []string{"system:masters"}},
 	}))

@@ -5,55 +5,25 @@ module k8s.io/code-generator
 go 1.12
 
 require (
-	github.com/gogo/protobuf v1.1.1
-	github.com/spf13/pflag v1.0.1
-	golang.org/x/tools v0.0.0-20190328211700-ab21143f2384 // indirect
+	github.com/emicklei/go-restful v2.9.5+incompatible // indirect
+	github.com/go-openapi/spec v0.19.2 // indirect
+	github.com/gogo/protobuf v1.2.2-0.20190723190241-65acae22fc9d
+	github.com/json-iterator/go v1.1.7 // indirect
+	github.com/modern-go/reflect2 v1.0.1 // indirect
+	github.com/spf13/pflag v1.0.3
+	golang.org/x/net v0.0.0-20190812203447-cdfb69ac37fc // indirect
+	golang.org/x/tools v0.0.0-20190621195816-6e04913cbbac // indirect
 	gonum.org/v1/gonum v0.0.0-20190331200053-3d26580ed485
 	gonum.org/v1/netlib v0.0.0-20190331212654-76723241ea4e // indirect
-	k8s.io/gengo v0.0.0-20190116091435-f8a0810f38af
-	k8s.io/klog v0.0.0-20190306015804-8e90cee79f82
+	k8s.io/gengo v0.0.0-20190822140433-26a664648505
+	k8s.io/klog v0.4.0
+	k8s.io/kube-openapi v0.0.0-20190816220812-743ec37842bf
 )
 
 replace (
-	github.com/BurntSushi/xgb => github.com/BurntSushi/xgb v0.0.0-20160522181843-27f122750802
-	github.com/gogo/protobuf => github.com/gogo/protobuf v0.0.0-20171007142547-342cbe0a0415
-	github.com/remyoudompheng/bigfft => github.com/remyoudompheng/bigfft v0.0.0-20170806203942-52369c62f446
-	github.com/spf13/pflag => github.com/spf13/pflag v1.0.1
-	golang.org/x/exp => golang.org/x/exp v0.0.0-20190312203227-4b39c73a6495
-	golang.org/x/image => golang.org/x/image v0.0.0-20190227222117-0694c2d4d067
-	golang.org/x/mobile => golang.org/x/mobile v0.0.0-20190312151609-d3739f865fa6
+	golang.org/x/crypto => golang.org/x/crypto v0.0.0-20181025213731-e84da0312774
+	golang.org/x/sync => golang.org/x/sync v0.0.0-20181108010431-42b317875d0f
 	golang.org/x/sys => golang.org/x/sys v0.0.0-20190209173611-3b5209105503
 	golang.org/x/text => golang.org/x/text v0.3.1-0.20181227161524-e6919f6577db
-	golang.org/x/tools => golang.org/x/tools v0.0.0-20190313210603-aa82965741a9
-	gonum.org/v1/gonum => gonum.org/v1/gonum v0.0.0-20190331200053-3d26580ed485
-	gonum.org/v1/netlib => gonum.org/v1/netlib v0.0.0-20190331212654-76723241ea4e
-	k8s.io/api => ../api
-	k8s.io/apiextensions-apiserver => ../apiextensions-apiserver
-	k8s.io/apimachinery => ../apimachinery
-	k8s.io/apiserver => ../apiserver
-	k8s.io/cli-runtime => ../cli-runtime
-	k8s.io/client-go => ../client-go
-	k8s.io/cloud-provider => ../cloud-provider
-	k8s.io/cluster-bootstrap => ../cluster-bootstrap
 	k8s.io/code-generator => ../code-generator
-	k8s.io/component-base => ../component-base
-	k8s.io/cri-api => ../cri-api
-	k8s.io/csi-translation-lib => ../csi-translation-lib
-	k8s.io/gengo => k8s.io/gengo v0.0.0-20190116091435-f8a0810f38af
-	k8s.io/klog => k8s.io/klog v0.0.0-20190306015804-8e90cee79f82
-	k8s.io/kube-aggregator => ../kube-aggregator
-	k8s.io/kube-controller-manager => ../kube-controller-manager
-	k8s.io/kube-proxy => ../kube-proxy
-	k8s.io/kube-scheduler => ../kube-scheduler
-	k8s.io/kubelet => ../kubelet
-	k8s.io/metrics => ../metrics
-	k8s.io/node-api => ../node-api
-	k8s.io/sample-apiserver => ../sample-apiserver
-	k8s.io/sample-cli-plugin => ../sample-cli-plugin
-	k8s.io/sample-controller => ../sample-controller
-	modernc.org/cc => modernc.org/cc v1.0.0
-	modernc.org/golex => modernc.org/golex v1.0.0
-	modernc.org/mathutil => modernc.org/mathutil v1.0.0
-	modernc.org/strutil => modernc.org/strutil v1.0.0
-	modernc.org/xc => modernc.org/xc v1.0.0
 )
