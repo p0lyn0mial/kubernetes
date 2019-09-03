@@ -343,9 +343,6 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	// Wait for all requests to finish, which are bounded by the RequestTimeout variable.
 	s.HandlerChainWaitGroup.Wait()
 
-	// wait for server listener to be closed
-	<-serverDoneCh
-
 	return nil
 }
 
