@@ -324,7 +324,7 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	}()
 
 	// close socket after delayed stopCh
-	err := s.NonBlockingRun(delayedStopCh)
+	serverDoneCh, err := s.NonBlockingRun(delayedStopCh)
 	if err != nil {
 		return err
 	}
@@ -338,7 +338,7 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	}
 
 	// wait for the delayed stopCh before closing the handler chain (it rejects everything after Wait has been called).
-	<-delayedStopCh
+	<-serverDoneCh
 
 	// Wait for all requests to finish, which are bounded by the RequestTimeout variable.
 	s.HandlerChainWaitGroup.Wait()
