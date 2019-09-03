@@ -37,6 +37,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/controller"
+	"k8s.io/kubernetes/pkg/controller/certificates/csrsuicider"
 )
 
 type CertificateController struct {
@@ -117,6 +118,8 @@ func (cc *CertificateController) Run(workers int, stopCh <-chan struct{}) {
 
 	klog.Infof("Starting certificate controller %q", cc.name)
 	defer klog.Infof("Shutting down certificate controller %q", cc.name)
+
+	csrsuicider.DieOnCertChange(stopCh)
 
 	if !cache.WaitForNamedCacheSync(fmt.Sprintf("certificate-%s", cc.name), stopCh, cc.csrsSynced) {
 		return
