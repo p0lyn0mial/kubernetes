@@ -137,6 +137,8 @@ cluster's shared state through which all other components interact.`,
 				}
 
 				enablement.ForceGlobalInitializationForOpenShift(s)
+				enablement.InstallOpenShiftAdmissionPlugins(s)
+
 			}
 
 			// set default options
