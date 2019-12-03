@@ -8,6 +8,7 @@ go 1.12
 
 require (
 	bitbucket.org/bertimus9/systemstat v0.0.0-20180207000608-0eeff89b0690
+	bitbucket.org/ww/goautoneg v0.0.0-20120707110453-75cd24fc2f2c // indirect
 	github.com/Azure/azure-sdk-for-go v35.0.0+incompatible
 	github.com/Azure/go-autorest/autorest v0.9.0
 	github.com/Azure/go-autorest/autorest/adal v0.5.0
@@ -64,6 +65,7 @@ require (
 	github.com/gogo/protobuf v1.2.2-0.20190723190241-65acae22fc9d
 	github.com/golang/groupcache v0.0.0-20160516000752-02826c3e7903
 	github.com/golang/mock v1.2.0
+	github.com/google/btree v1.0.0
 	github.com/google/cadvisor v0.34.0
 	github.com/google/go-cmp v0.3.0
 	github.com/google/gofuzz v1.0.0
@@ -96,10 +98,10 @@ require (
 	github.com/opencontainers/runc v1.0.0-rc9
 	github.com/opencontainers/runtime-spec v1.0.0 // indirect
 	github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
-	github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible // indirect
-	github.com/openshift/apiserver-library-go v0.0.0-20190905121346-5e6eb64c9383
+	github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible
+	github.com/openshift/apiserver-library-go v0.0.0-20191121120807-0dbf2b787e04
 	github.com/openshift/client-go v0.0.0-20190905095913-1ede333d7ba5
-	github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d // indirect
+	github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d
 	github.com/pkg/errors v0.8.1
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/pquerna/ffjson v0.0.0-20180717144149-af8b230fcd20 // indirect
@@ -134,7 +136,9 @@ require (
 	gonum.org/v1/gonum v0.0.0-20190331200053-3d26580ed485
 	google.golang.org/api v0.6.1-0.20190607001116-5213b8090861
 	google.golang.org/grpc v1.23.1
+	gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d // indirect
 	gopkg.in/gcfg.v1 v1.2.0
+	gopkg.in/ldap.v2 v2.5.1 // indirect
 	gopkg.in/square/go-jose.v2 v2.2.2
 	gopkg.in/yaml.v2 v2.2.4
 	gotest.tools v2.2.0+incompatible
@@ -174,6 +178,7 @@ require (
 
 replace (
 	bitbucket.org/bertimus9/systemstat => bitbucket.org/bertimus9/systemstat v0.0.0-20180207000608-0eeff89b0690
+	bitbucket.org/ww/goautoneg => bitbucket.org/ww/goautoneg v0.0.0-20120707110453-75cd24fc2f2c
 	cloud.google.com/go => cloud.google.com/go v0.38.0
 	github.com/Azure/azure-sdk-for-go => github.com/Azure/azure-sdk-for-go v35.0.0+incompatible
 	github.com/Azure/go-ansiterm => github.com/Azure/go-ansiterm v0.0.0-20170929234023-d6e3b3328b78
@@ -419,7 +424,7 @@ replace (
 	github.com/opencontainers/runtime-spec => github.com/opencontainers/runtime-spec v1.0.0
 	github.com/opencontainers/selinux => github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
 	github.com/openshift/api => github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible
-	github.com/openshift/apiserver-library-go => github.com/openshift/apiserver-library-go v0.0.0-20190905121346-5e6eb64c9383
+	github.com/openshift/apiserver-library-go => github.com/openshift/apiserver-library-go v0.0.0-20191121120807-0dbf2b787e04
 	github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20190905095913-1ede333d7ba5
 	github.com/openshift/library-go => github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d
 	github.com/pelletier/go-toml => github.com/pelletier/go-toml v1.2.0
@@ -515,6 +520,7 @@ replace (
 	google.golang.org/grpc => google.golang.org/grpc v1.23.1
 	gopkg.in/airbrake/gobrake.v2 => gopkg.in/airbrake/gobrake.v2 v2.0.9
 	gopkg.in/alecthomas/kingpin.v2 => gopkg.in/alecthomas/kingpin.v2 v2.2.6
+	gopkg.in/asn1-ber.v1 => gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d
 	gopkg.in/check.v1 => gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127
 	gopkg.in/cheggaaa/pb.v1 => gopkg.in/cheggaaa/pb.v1 v1.0.25
 	gopkg.in/errgo.v2 => gopkg.in/errgo.v2 v2.1.0
@@ -522,6 +528,7 @@ replace (
 	gopkg.in/gcfg.v1 => gopkg.in/gcfg.v1 v1.2.0
 	gopkg.in/gemnasium/logrus-airbrake-hook.v2 => gopkg.in/gemnasium/logrus-airbrake-hook.v2 v2.1.2
 	gopkg.in/inf.v0 => gopkg.in/inf.v0 v0.9.1
+	gopkg.in/ldap.v2 => gopkg.in/ldap.v2 v2.5.1
 	gopkg.in/mcuadros/go-syslog.v2 => gopkg.in/mcuadros/go-syslog.v2 v2.2.1
 	gopkg.in/natefinch/lumberjack.v2 => gopkg.in/natefinch/lumberjack.v2 v2.0.0
 	gopkg.in/resty.v1 => gopkg.in/resty.v1 v1.12.0

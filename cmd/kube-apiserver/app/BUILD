@@ -5,12 +5,16 @@ go_library(
     srcs = [
         "aggregator.go",
         "apiextensions.go",
+        "patch_openshift.go",
         "server.go",
     ],
     importpath = "k8s.io/kubernetes/cmd/kube-apiserver/app",
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/kube-apiserver/app/options:go_default_library",
+        "//openshift-kube-apiserver/configdefault:go_default_library",
+        "//openshift-kube-apiserver/enablement:go_default_library",
+        "//openshift-kube-apiserver/openshiftkubeapiserver:go_default_library",
         "//pkg/api/legacyscheme:go_default_library",
         "//pkg/apis/core:go_default_library",
         "//pkg/apis/core/v1:go_default_library",

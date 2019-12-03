@@ -28,6 +28,7 @@ filegroup(
     name = "all-srcs",
     srcs = [
         ":package-srcs",
+        "//vendor/github.com/openshift/client-go/authorization/clientset/versioned/fake:all-srcs",
         "//vendor/github.com/openshift/client-go/authorization/clientset/versioned/scheme:all-srcs",
         "//vendor/github.com/openshift/client-go/authorization/clientset/versioned/typed/authorization/v1:all-srcs",
     ],
