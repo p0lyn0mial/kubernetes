@@ -11,6 +11,7 @@ go_library(
     srcs = [
         "daemon_controller.go",
         "doc.go",
+        "patch_nodeselector.go",
         "update.go",
     ],
     importpath = "k8s.io/kubernetes/pkg/controller/daemon",
@@ -55,6 +56,7 @@ go_test(
     name = "go_default_test",
     srcs = [
         "daemon_controller_test.go",
+        "patch_nodeselector_test.go",
         "update_test.go",
     ],
     embed = [":go_default_library"],

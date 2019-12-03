@@ -98,7 +98,7 @@ require (
 	github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
 	github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible // indirect
 	github.com/openshift/apiserver-library-go v0.0.0-20190905121346-5e6eb64c9383
-	github.com/openshift/client-go v0.0.0-20190905095913-1ede333d7ba5 // indirect
+	github.com/openshift/client-go v0.0.0-20190905095913-1ede333d7ba5
 	github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d // indirect
 	github.com/pkg/errors v0.8.1
 	github.com/pmezard/go-difflib v1.0.0
