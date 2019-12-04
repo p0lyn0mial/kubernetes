@@ -603,7 +603,7 @@ github.com/opencontainers/runtime-spec/specs-go
 # github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52 => github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
 github.com/opencontainers/selinux/go-selinux
 github.com/opencontainers/selinux/go-selinux/label
-# github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible => github.com/openshift/api v3.9.1-0.20190905133006-15918a3c2c89+incompatible
+# github.com/openshift/api v3.9.1-0.20191201231411-9f834e337466+incompatible => github.com/openshift/api v3.9.1-0.20191201231411-9f834e337466+incompatible
 github.com/openshift/api/apps/v1
 github.com/openshift/api/authorization/v1
 github.com/openshift/api/build/v1
@@ -741,7 +741,7 @@ github.com/openshift/client-go/user/informers/externalversions/internalinterface
 github.com/openshift/client-go/user/informers/externalversions/user
 github.com/openshift/client-go/user/informers/externalversions/user/v1
 github.com/openshift/client-go/user/listers/user/v1
-# github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d => github.com/openshift/library-go v0.0.0-20190905102004-859f44d2f80d
+# github.com/openshift/library-go v0.0.0-20191203164047-7cbbcc8aab8b => github.com/openshift/library-go v0.0.0-20191203164047-7cbbcc8aab8b
 github.com/openshift/library-go/pkg/apiserver/admission/admissionregistrationtesting
 github.com/openshift/library-go/pkg/apiserver/admission/admissionrestconfig
 github.com/openshift/library-go/pkg/apiserver/admission/admissiontimeout

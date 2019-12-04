@@ -24,6 +24,7 @@ go_library(
         "types_project.go",
         "types_proxy.go",
         "types_scheduling.go",
+        "types_tlssecurityprofile.go",
         "zz_generated.deepcopy.go",
         "zz_generated.swagger_doc_generated.go",
     ],

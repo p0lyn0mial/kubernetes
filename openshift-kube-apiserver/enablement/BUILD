@@ -3,6 +3,7 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "go_default_library",
     srcs = [
+        "admission.go",
         "enablement.go",
         "intialization.go",
         "kubecontrolplane_refs.go",
@@ -11,7 +12,9 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/kube-apiserver/app/options:go_default_library",
+        "//openshift-kube-apiserver/admission/customresourcevalidation/customresourcevalidationregistration:go_default_library",
         "//openshift-kube-apiserver/configdefault:go_default_library",
+        "//openshift-kube-apiserver/kubeadmission:go_default_library",
         "//pkg/capabilities:go_default_library",
         "//pkg/kubelet/types:go_default_library",
         "//plugin/pkg/auth/authorizer/rbac/bootstrappolicy:go_default_library",

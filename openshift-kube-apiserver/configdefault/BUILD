@@ -10,7 +10,6 @@ go_library(
     visibility = ["//visibility:public"],
     deps = [
         "//cmd/kube-apiserver/app/options:go_default_library",
-        "//openshift-kube-apiserver/admission/customresourcevalidation/customresourcevalidationregistration:go_default_library",
         "//openshift-kube-apiserver/admission/namespaceconditions:go_default_library",
         "//openshift-kube-apiserver/kubeadmission:go_default_library",
         "//staging/src/k8s.io/apiserver/pkg/admission:go_default_library",
