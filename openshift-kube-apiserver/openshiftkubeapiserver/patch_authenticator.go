@@ -6,6 +6,7 @@ import (
 
 	"k8s.io/apiserver/pkg/server/dynamiccertificates"
 
+	authenticationv1beta1 "k8s.io/api/authentication/v1beta1"
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	"k8s.io/apiserver/pkg/authentication/group"
 	"k8s.io/apiserver/pkg/authentication/request/anonymous"
@@ -152,7 +153,7 @@ func newAuthenticator(
 			return nil, nil, fmt.Errorf("Error parsing CacheTTL=%q: %v", wta.CacheTTL, err)
 		}
 		// TODO audiences
-		webhookTokenAuthenticator, err := webhooktoken.New(wta.ConfigFile, nil)
+		webhookTokenAuthenticator, err := webhooktoken.New(wta.ConfigFile, authenticationv1beta1.SchemeGroupVersion.Version, nil)
 		if err != nil {
 			return nil, nil, fmt.Errorf("Failed to create webhook token authenticator for ConfigFile=%q: %v", wta.ConfigFile, err)
 		}
