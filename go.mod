@@ -570,3 +570,13 @@ replace (
 	sourcegraph.com/sqs/pbtypes => sourcegraph.com/sqs/pbtypes v0.0.0-20180604144634-d3ebe8f20ae4
 	vbom.ml/util => vbom.ml/util v0.0.0-20160121211510-db5cfe13f5cc
 )
+
+replace github.com/openshift/apiserver-library-go => github.com/openshift/apiserver-library-go v0.0.0-20191121120807-0dbf2b787e04
+
+replace github.com/openshift/api => github.com/openshift/api v3.9.1-0.20191201231411-9f834e337466+incompatible
+
+replace github.com/openshift/library-go => github.com/openshift/library-go v0.0.0-20191203164047-7cbbcc8aab8b
+
+replace gopkg.in/asn1-ber.v1 => gopkg.in/asn1-ber.v1 v1.0.0-20181015200546-f715ec2f112d
+
+replace github.com/openshift/client-go => github.com/openshift/client-go v0.0.0-20190905095913-1ede333d7ba5
