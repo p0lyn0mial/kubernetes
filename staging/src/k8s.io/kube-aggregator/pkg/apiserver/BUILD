@@ -38,6 +38,7 @@ go_library(
         "apiservice_controller.go",
         "handler_apis.go",
         "handler_proxy.go",
+        "patch_always_local_delegate.go",
         "resolvers.go",
     ],
     importmap = "k8s.io/kubernetes/vendor/k8s.io/kube-aggregator/pkg/apiserver",

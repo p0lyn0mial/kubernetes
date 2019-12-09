@@ -77,6 +77,7 @@ go_library(
         "//vendor/github.com/davecgh/go-spew/spew:go_default_library",
         "//vendor/github.com/onsi/ginkgo:go_default_library",
         "//vendor/github.com/onsi/gomega:go_default_library",
+        "//vendor/k8s.io/utils/integer:go_default_library",
         "//vendor/k8s.io/utils/pointer:go_default_library",
     ],
 )
