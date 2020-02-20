@@ -17,9 +17,9 @@ limitations under the License.
 package options
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"k8s.io/client-go/informers"
 	"strings"
 	"time"
 
@@ -27,7 +27,6 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apiserver/pkg/authentication/authenticatorfactory"
 	"k8s.io/apiserver/pkg/authentication/request/headerrequest"
@@ -229,7 +228,7 @@ func (s *DelegatingAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 		"Note that this can result in authentication that treats all requests as anonymous.")
 }
 
-func (s *DelegatingAuthenticationOptions) ApplyTo(authenticationInfo *server.AuthenticationInfo, servingInfo *server.SecureServingInfo, openAPIConfig *openapicommon.Config) error {
+func (s *DelegatingAuthenticationOptions) ApplyTo(informers informers.SharedInformerFactory, authenticationInfo *server.AuthenticationInfo, servingInfo *server.SecureServingInfo, openAPIConfig *openapicommon.Config) error {
 	if s == nil {
 		authenticationInfo.Authenticator = nil
 		return nil
@@ -291,7 +290,7 @@ func (s *DelegatingAuthenticationOptions) ApplyTo(authenticationInfo *server.Aut
 		if client == nil {
 			klog.Warningf("No authentication-kubeconfig provided in order to lookup requestheader-client-ca-file in configmap/%s in %s, so request-header client certificate authentication won't work.", authenticationConfigMapName, authenticationConfigMapNamespace)
 		} else {
-			requestHeaderConfig, err = s.createRequestHeaderConfig(client)
+			requestHeaderConfig, err = s.createRequestHeaderConfig(informers, client)
 			if err != nil {
 				if s.TolerateInClusterLookupFailure {
 					klog.Warningf("Error looking up in-cluster authentication configuration: %v", err)
@@ -334,49 +333,20 @@ const (
 	authenticationRoleName      = "extension-apiserver-authentication-reader"
 )
 
-func (s *DelegatingAuthenticationOptions) createRequestHeaderConfig(client kubernetes.Interface) (*authenticatorfactory.RequestHeaderConfig, error) {
+func (s *DelegatingAuthenticationOptions) createRequestHeaderConfig(informers informers.SharedInformerFactory, client kubernetes.Interface) (*authenticatorfactory.RequestHeaderConfig, error) {
 	requestHeaderCAProvider, err := dynamiccertificates.NewDynamicCAFromConfigMapController("client-ca", authenticationConfigMapNamespace, authenticationConfigMapName, "requestheader-client-ca-file", client)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create request header authentication config: %v", err)
 	}
 
-	authConfigMap, err := client.CoreV1().ConfigMaps(authenticationConfigMapNamespace).Get(context.TODO(), authenticationConfigMapName, metav1.GetOptions{})
-	switch {
-	case errors.IsNotFound(err):
-		// ignore, authConfigMap is nil now
-		return nil, nil
-	case errors.IsForbidden(err):
-		klog.Warningf("Unable to get configmap/%s in %s.  Usually fixed by "+
-			"'kubectl create rolebinding -n %s ROLEBINDING_NAME --role=%s --serviceaccount=YOUR_NS:YOUR_SA'",
-			authenticationConfigMapName, authenticationConfigMapNamespace, authenticationConfigMapNamespace, authenticationRoleName)
-		return nil, err
-	case err != nil:
-		return nil, err
-	}
-
-	usernameHeaders, err := deserializeStrings(authConfigMap.Data["requestheader-username-headers"])
-	if err != nil {
-		return nil, err
-	}
-	groupHeaders, err := deserializeStrings(authConfigMap.Data["requestheader-group-headers"])
-	if err != nil {
-		return nil, err
-	}
-	extraHeaderPrefixes, err := deserializeStrings(authConfigMap.Data["requestheader-extra-headers-prefix"])
-	if err != nil {
-		return nil, err
-	}
-	allowedNames, err := deserializeStrings(authConfigMap.Data["requestheader-allowed-names"])
-	if err != nil {
-		return nil, err
-	}
+	dynamicRequestHeaderProvider := headerrequest.NewDynamicRequestHeaderAuthRequestProvider(informers.Core().V1().ConfigMaps().Lister().ConfigMaps(authenticationConfigMapNamespace), authenticationConfigMapName, authenticationConfigMapNamespace, authenticationRoleName, "requestheader-username-headers", "requestheader-group-headers", "requestheader-extra-headers-prefix", "requestheader-allowed-names")
 
 	return &authenticatorfactory.RequestHeaderConfig{
 		CAContentProvider:   requestHeaderCAProvider,
-		UsernameHeaders:     headerrequest.StaticStringSlice(usernameHeaders),
-		GroupHeaders:        headerrequest.StaticStringSlice(groupHeaders),
-		ExtraHeaderPrefixes: headerrequest.StaticStringSlice(extraHeaderPrefixes),
-		AllowedClientNames:  headerrequest.StaticStringSlice(allowedNames),
+		UsernameHeaders:     headerrequest.StringSliceProvider(headerrequest.StringSliceProviderFunc(dynamicRequestHeaderProvider.UsernameHeaders)),
+		GroupHeaders:        headerrequest.StringSliceProvider(headerrequest.StringSliceProviderFunc(dynamicRequestHeaderProvider.GroupHeaders)),
+		ExtraHeaderPrefixes: headerrequest.StringSliceProvider(headerrequest.StringSliceProviderFunc(dynamicRequestHeaderProvider.ExtraHeaderPrefixes)),
+		AllowedClientNames:  headerrequest.StringSliceProvider(headerrequest.StringSliceProviderFunc(dynamicRequestHeaderProvider.AllowedClientNames)),
 	}, nil
 }
 
