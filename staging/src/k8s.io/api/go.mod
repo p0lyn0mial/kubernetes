@@ -12,9 +12,10 @@ require (
 
 replace (
 	github.com/coreos/etcd => github.com/coreos/etcd v3.3.10+incompatible
+	github.com/golang/protobuf => github.com/golang/protobuf v1.3.2
 	github.com/google/go-cmp => github.com/google/go-cmp v0.3.0
-	github.com/googleapis/gnostic => github.com/googleapis/gnostic v0.1.0
 	github.com/imdario/mergo => github.com/imdario/mergo v0.3.5
+	github.com/kr/pretty => github.com/kr/pretty v0.1.0
 	github.com/prometheus/client_golang => github.com/prometheus/client_golang v1.0.0
 	github.com/vishvananda/netns => github.com/vishvananda/netns v0.0.0-20171111001504-be1fbeda1936
 	go.uber.org/atomic => go.uber.org/atomic v1.3.2
@@ -22,6 +23,7 @@ replace (
 	golang.org/x/net => golang.org/x/net v0.0.0-20191004110552-13f9640d40b9
 	golang.org/x/sys => golang.org/x/sys v0.0.0-20190813064441-fde4db37ae7a // pinned to release-branch.go1.13
 	golang.org/x/tools => golang.org/x/tools v0.0.0-20190821162956-65e3620a7ae7 // pinned to release-branch.go1.13
+	gopkg.in/check.v1 => gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127
 	k8s.io/api => ../api
 	k8s.io/apiextensions-apiserver => ../apiextensions-apiserver
 	k8s.io/apimachinery => ../apimachinery
