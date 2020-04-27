@@ -167,7 +167,7 @@ func (o *CloudControllerManagerOptions) ApplyTo(c *cloudcontrollerconfig.Config,
 		return err
 	}
 	if o.SecureServing.BindPort != 0 || o.SecureServing.Listener != nil {
-		if err = o.Authentication.ApplyTo(&c.Authentication, c.SecureServing, nil); err != nil {
+		if err = o.Authentication.ApplyTo(c.SharedInformers, &c.Authentication, c.SecureServing, nil); err != nil {
 			return err
 		}
 		if err = o.Authorization.ApplyTo(&c.Authorization); err != nil {

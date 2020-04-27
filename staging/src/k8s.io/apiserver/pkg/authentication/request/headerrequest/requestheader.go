@@ -18,8 +18,11 @@ package headerrequest
 
 import (
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/klog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -27,6 +30,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 	x509request "k8s.io/apiserver/pkg/authentication/request/x509"
 	"k8s.io/apiserver/pkg/authentication/user"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 	utilcert "k8s.io/client-go/util/cert"
 )
 
@@ -235,5 +239,83 @@ func newExtra(h http.Header, headerPrefixes []string) map[string][]string {
 		}
 	}
 
+	return ret
+}
+
+func deserializeStrings(in string) ([]string, error) {
+	if len(in) == 0 {
+		return nil, nil
+	}
+	var ret []string
+	if err := json.Unmarshal([]byte(in), &ret); err != nil {
+		return nil, err
+	}
+	return ret, nil
+}
+
+// TODO: doc
+type DynamicRequestHeaderAuthRequestProvider struct {
+	configmapLister corev1listers.ConfigMapNamespaceLister
+	configmapName   string
+	configmapNamespace string
+	authenticationRoleName string
+
+	usernameHeadersKey     string
+	groupHeadersKey        string
+	extraHeaderPrefixesKey string
+	allowedClientNamesKey  string
+}
+
+// TODO: doc
+func NewDynamicRequestHeaderAuthRequestProvider(configmapLister corev1listers.ConfigMapNamespaceLister, configmapName, configmapNamespace, authenticationRoleName,
+	usernameHeadersKey, groupHeadersKey, extraHeaderPrefixesKey, allowedClientNamesKey string) *DynamicRequestHeaderAuthRequestProvider {
+	return &DynamicRequestHeaderAuthRequestProvider{
+		configmapLister: configmapLister,
+		configmapName: configmapName,
+		configmapNamespace: configmapNamespace,
+		authenticationRoleName: authenticationRoleName,
+		usernameHeadersKey: usernameHeadersKey,
+		groupHeadersKey: groupHeadersKey,
+		extraHeaderPrefixesKey: extraHeaderPrefixesKey,
+		allowedClientNamesKey: allowedClientNamesKey}
+}
+
+func (c *DynamicRequestHeaderAuthRequestProvider) UsernameHeaders() []string {
+	return c.getValuesFor(c.usernameHeadersKey)
+}
+
+func (c *DynamicRequestHeaderAuthRequestProvider) GroupHeaders() []string {
+	return c.getValuesFor(c.groupHeadersKey)
+}
+
+func (c *DynamicRequestHeaderAuthRequestProvider) ExtraHeaderPrefixes() []string {
+	return c.getValuesFor(c.extraHeaderPrefixesKey)
+}
+
+func (c *DynamicRequestHeaderAuthRequestProvider) AllowedClientNames() []string {
+	return c.getValuesFor(c.allowedClientNamesKey)
+}
+
+func (c *DynamicRequestHeaderAuthRequestProvider) getValuesFor(key string) []string {
+	configMap, err := c.configmapLister.Get(c.configmapName)
+	switch {
+	case errors.IsNotFound(err):
+		// ignore, authConfigMap is nil now
+		return nil
+	case errors.IsForbidden(err):
+		klog.Warningf("Unable to get configmap/%s in %s.  Usually fixed by "+
+			"'kubectl create rolebinding -n %s ROLEBINDING_NAME --role=%s --serviceaccount=YOUR_NS:YOUR_SA'",
+			c.configmapName, c.configmapNamespace, c.configmapNamespace, c.authenticationRoleName)
+		return nil
+	case err != nil:
+		klog.Warningf("failed to read %q configmap: %v", c.configmapName, err)
+		return nil
+	}
+
+	ret, err := deserializeStrings(configMap.Data[key])
+	if err != nil {
+		klog.Warningf("key under %q in %q configmap has invalid data: %v", key, c.configmapName, err)
+		return nil
+	}
 	return ret
 }

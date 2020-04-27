@@ -210,7 +210,7 @@ func (o *Options) ApplyTo(c *schedulerappconfig.Config) error {
 		return err
 	}
 	if o.SecureServing != nil && (o.SecureServing.BindPort != 0 || o.SecureServing.Listener != nil) {
-		if err := o.Authentication.ApplyTo(&c.Authentication, c.SecureServing, nil); err != nil {
+		if err := o.Authentication.ApplyTo(c.InformerFactory, &c.Authentication, c.SecureServing, nil); err != nil {
 			return err
 		}
 		if err := o.Authorization.ApplyTo(&c.Authorization); err != nil {
