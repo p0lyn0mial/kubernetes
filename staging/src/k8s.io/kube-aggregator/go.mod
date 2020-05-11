@@ -10,6 +10,9 @@ require (
 	github.com/go-openapi/spec v0.19.3
 	github.com/gogo/protobuf v1.3.1
 	github.com/json-iterator/go v1.1.8
+	github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a // indirect
+	github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0
+	github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f // indirect
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.4.0

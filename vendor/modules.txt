@@ -617,6 +617,12 @@ github.com/opencontainers/runtime-spec/specs-go
 # github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52 => github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
 github.com/opencontainers/selinux/go-selinux
 github.com/opencontainers/selinux/go-selinux/label
+# github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a => github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a
+github.com/p0lyn0mial/batch-working-queue
+# github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0 => github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0
+github.com/p0lyn0mial/failure-detector
+# github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f => github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f
+github.com/p0lyn0mial/ttl-cache
 # github.com/pelletier/go-toml v1.2.0 => github.com/pelletier/go-toml v1.2.0
 github.com/pelletier/go-toml
 # github.com/peterbourgon/diskv v2.0.1+incompatible => github.com/peterbourgon/diskv v2.0.1+incompatible
