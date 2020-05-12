@@ -18,11 +18,14 @@ package apiserver
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	failuredetector "github.com/p0lyn0mial/failure-detector"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/httpstream"
@@ -107,45 +110,134 @@ func proxyError(w http.ResponseWriter, req *http.Request, error string, code int
 }
 
 func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	w = newStatusResponseWriter(w, req)
+	errRsp := newHijackResponder(&responder{w: w}, req)
+	// TODO: to builder pattern
+	retryManager := newHijackProtector(w.(*statusResponseWriter), newMaxRetries(newRetryDetector(errRsp), 3))
+
+	visitedEPs := []*url.URL{}
+	for {
+		done := func() bool {
+			var visitedEP *url.URL
+
+			defer func() {
+				if visitedEP != nil {
+					// TODO: what to report ?
+					//   - response time
+					r.serviceReporter(visitedEP, w.(*statusResponseWriter).statusCode, retryManager.LastKnownError())
+				}
+			}()
+			// TODO: do we have to clone the req ?
+			// TODO: detect disconnected client
+			visitedEP = r.serveHTTP(w, req, errRsp, r.serviceResolverWrapper(visitedEPs))
+			if visitedEP != nil {
+				visitedEPs = append(visitedEPs, visitedEP)
+			}
+
+			// TODO: add logs
+			// TODO: backoff, jitter
+			if !retryManager.ShouldRetry() {
+				return false
+			}
+			retryManager.Reset()
+			return true
+		}()
+		if !done {
+			break
+		}
+	}
+
+	if w.(*statusResponseWriter).statusCode == 0 && !w.(*statusResponseWriter).wasHijacked {
+		// TODO: send HTTP 503 if the error is retriable
+		//       otherwise send HTTP 500
+		proxyError(w, req, "service unavailable", http.StatusServiceUnavailable)
+	}
+}
+
+// TODO: come up with better abstractions
+func (r *proxyHandler) serviceReporter(visitedEP *url.URL, httpStatusCode int, lastKnownError error) {
+	if serviceReporter, ok := r.serviceResolver.(ServiceResolverWithCollector); ok {
+		value := r.handlingInfo.Load()
+		if value == nil {
+			// should never happen
+			klog.Warning("unable to report health stats no handling info for proxy handler")
+			return
+		}
+		handlingInfo := value.(proxyHandlingInfo)
+
+		// create an error if the lastKnownError is unknown but the HTTP Status indicates an error
+		// TODO: can this ever happen ?
+		if lastKnownError == nil && httpStatusCode >= 500 {
+			lastKnownError = fmt.Errorf("%d", httpStatusCode)
+		}
+		sample := &failuredetector.EndpointSample{Namespace: handlingInfo.serviceNamespace, Service: handlingInfo.serviceName, URL: visitedEP, Err: lastKnownError}
+
+		select {
+		case serviceReporter.Collector() <- sample:
+		default:
+			klog.Warningf("unable to report health stats (slow chan consumer !) for an endpoint %s in %s/%s, the last known error was %v", visitedEP.String(), handlingInfo.serviceNamespace, handlingInfo.serviceName, lastKnownError)
+		}
+	}
+}
+
+// I am not sure what it takes to add a new feature to the aggregator. Maybe the whole thing will be hidden behind a feature flag, maybe not.
+// Thus I decided to provide this wrapper as a way to encapsulate possible implementations. That is:
+//  - the old implementation
+//  - a new implementation that only supports retries (ServiceResolverWithVisited)
+//  - a new implementation that supports retries and picking up the best possible EP at the given time by examining weights assigned to EPs (ServiceResolverWithVisited, ServiceResolverWithCollector, FailureDetector)
+func (r *proxyHandler) serviceResolverWrapper(visitedEPs []*url.URL) func(namespace, name string, port int32) (*url.URL, error) {
+	serviceResolverWrapper := func(namespace, name string, port int32) (*url.URL, error) {
+		if serviceResolver, ok := r.serviceResolver.(ServiceResolverWithVisited); ok {
+			return serviceResolver.ResolveEndpointWithVisited(namespace, name, port, visitedEPs)
+		}
+		return r.serviceResolver.ResolveEndpoint(namespace, name, port)
+	}
+	return serviceResolverWrapper
+}
+
+func (r *proxyHandler) serveHTTP(w http.ResponseWriter, req *http.Request, errResponder proxy.ErrorResponder, serviceResolverFn func(namespace, name string, port int32) (*url.URL, error)) *url.URL {
 	value := r.handlingInfo.Load()
 	if value == nil {
 		r.localDelegate.ServeHTTP(w, req)
-		return
+		return nil
 	}
 	handlingInfo := value.(proxyHandlingInfo)
 	if handlingInfo.local {
 		if r.localDelegate == nil {
 			http.Error(w, "", http.StatusNotFound)
-			return
+			return nil
 		}
+		// TODO: is localDelegate special? e.g. no retries ?
 		r.localDelegate.ServeHTTP(w, req)
-		return
+		return nil
 	}
 
+	// TODO: rework serviceAvailable - maybe it's not needed anymore
 	if !handlingInfo.serviceAvailable {
+		// TODO: retry
 		proxyError(w, req, "service unavailable", http.StatusServiceUnavailable)
-		return
+		return nil
 	}
 
 	if handlingInfo.transportBuildingError != nil {
 		proxyError(w, req, handlingInfo.transportBuildingError.Error(), http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	user, ok := genericapirequest.UserFrom(req.Context())
 	if !ok {
 		proxyError(w, req, "missing user", http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	// write a new location based on the existing request pointed at the target service
 	location := &url.URL{}
 	location.Scheme = "https"
-	rloc, err := r.serviceResolver.ResolveEndpoint(handlingInfo.serviceNamespace, handlingInfo.serviceName, handlingInfo.servicePort)
+	rloc, err := serviceResolverFn(handlingInfo.serviceNamespace, handlingInfo.serviceName, handlingInfo.servicePort)
 	if err != nil {
 		klog.Errorf("error resolving %s/%s: %v", handlingInfo.serviceNamespace, handlingInfo.serviceName, err)
 		proxyError(w, req, "service unavailable", http.StatusServiceUnavailable)
-		return
+		return nil
 	}
 	location.Host = rloc.Host
 	location.Path = req.URL.Path
@@ -156,14 +248,14 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	if handlingInfo.proxyRoundTripper == nil {
 		proxyError(w, req, "", http.StatusNotFound)
-		return
+		return nil
 	}
 
 	// we need to wrap the roundtripper in another roundtripper which will apply the front proxy headers
 	proxyRoundTripper, upgrade, err := maybeWrapForConnectionUpgrades(handlingInfo.restConfig, handlingInfo.proxyRoundTripper, req)
 	if err != nil {
 		proxyError(w, req, err.Error(), http.StatusInternalServerError)
-		return
+		return nil
 	}
 	proxyRoundTripper = transport.NewAuthProxyRoundTripper(user.GetName(), user.GetGroups(), user.GetExtra(), proxyRoundTripper)
 
@@ -175,8 +267,9 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		transport.SetAuthProxyHeaders(newReq, user.GetName(), user.GetGroups(), user.GetExtra())
 	}
 
-	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, true, upgrade, &responder{w: w})
+	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, true, upgrade, errResponder)
 	handler.ServeHTTP(w, newReq)
+	return rloc
 }
 
 // newRequestForProxy returns a shallow copy of the original request with a context that may include a timeout for discovery requests

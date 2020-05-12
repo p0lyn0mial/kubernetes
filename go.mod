@@ -97,6 +97,7 @@ require (
 	github.com/opencontainers/runc v1.0.0-rc10
 	github.com/opencontainers/runtime-spec v1.0.0 // indirect
 	github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
+	github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0
 	github.com/pkg/errors v0.9.1
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/pquerna/ffjson v0.0.0-20180717144149-af8b230fcd20 // indirect
@@ -424,6 +425,9 @@ replace (
 	github.com/opencontainers/runc => github.com/opencontainers/runc v1.0.0-rc10
 	github.com/opencontainers/runtime-spec => github.com/opencontainers/runtime-spec v1.0.0
 	github.com/opencontainers/selinux => github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52
+	github.com/p0lyn0mial/batch-working-queue => github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a
+	github.com/p0lyn0mial/failure-detector => github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0
+	github.com/p0lyn0mial/ttl-cache => github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f
 	github.com/pelletier/go-toml => github.com/pelletier/go-toml v1.2.0
 	github.com/peterbourgon/diskv => github.com/peterbourgon/diskv v2.0.1+incompatible
 	github.com/pkg/errors => github.com/pkg/errors v0.9.1

@@ -410,6 +410,12 @@ github.com/opencontainers/runtime-spec v1.0.0 h1:O6L965K88AilqnxeYPks/75HLpp4IG+
 github.com/opencontainers/runtime-spec v1.0.0/go.mod h1:jwyrGlmzljRJv/Fgzds9SsS/C5hL+LL3ko9hs6T5lQ0=
 github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52 h1:B8hYj3NxHmjsC3T+tnlZ1UhInqUgnyF1zlGPmzNg2Qk=
 github.com/opencontainers/selinux v1.3.1-0.20190929122143-5215b1806f52/go.mod h1:+BLncwf63G4dgOzykXAxcmnFlUaOlkDdmw/CqsW6pjs=
+github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a h1:msrvrQTWCWOjUj2sJZhG8JrNeQ43PQsbVy13OnaGVuc=
+github.com/p0lyn0mial/batch-working-queue v0.0.0-20200511091501-d87326ed735a/go.mod h1:PTDbndC6P2gYYyqKtegbAWqprBd8/3KeeaWmZdxF8ZY=
+github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0 h1:x0rzTK1F1NBDFnqXuS690g67/gus8mLOVx3J39QbqKY=
+github.com/p0lyn0mial/failure-detector v0.0.0-20200511131836-42e70bbc7eb0/go.mod h1:BkbqMoib5l6c0rSJoh0ep1W+5ZrMbyFpDSQ/cr2trPk=
+github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f h1:plVsxZZZJqXa2pN1g54Mw/PAb3tvhmndXyN1zaU6IoA=
+github.com/p0lyn0mial/ttl-cache v0.0.0-20200511091430-b21b42dbc05f/go.mod h1:HcmP7670Zfkf8tjY2fDLgRN7onbUlR83lPx0oOBa2iM=
 github.com/pelletier/go-toml v1.2.0 h1:T5zMGML61Wp+FlcbWjRDT7yAxhJNAiPPLOFECq181zc=
 github.com/pelletier/go-toml v1.2.0/go.mod h1:5z9KED0ma1S8pY6P1sdut58dfprrGBbd/94hg7ilaic=
 github.com/peterbourgon/diskv v2.0.1+incompatible h1:UBdAOUP5p4RWqPBg048CAvpKN+vxiaj6gdUUzhl4XmI=

@@ -29,9 +29,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	gcontext "context"
 
 	"github.com/go-openapi/spec"
 	"github.com/spf13/cobra"
+	failuredetector "github.com/p0lyn0mial/failure-detector"
 
 	extensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -281,7 +283,7 @@ func CreateKubeAPIServerConfig(
 	[]admission.PluginInitializer,
 	error,
 ) {
-	genericConfig, versionedInformers, insecureServingInfo, serviceResolver, pluginInitializers, admissionPostStartHook, storageFactory, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
+	genericConfig, versionedInformers, insecureServingInfo, serviceResolver, serviceResolverPostStartHook, pluginInitializers, admissionPostStartHook, storageFactory, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -375,6 +377,12 @@ func CreateKubeAPIServerConfig(
 		return nil, nil, nil, nil, err
 	}
 
+	if serviceResolverPostStartHook != nil {
+		if err := config.GenericConfig.AddPostStartHook("start-kube-apiserver-service-resolver", serviceResolverPostStartHook); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+
 	if nodeTunneler != nil {
 		// Use the nodeTunneler's dialer to connect to the kubelet
 		config.ExtraConfig.KubeletClientConfig.Dial = nodeTunneler.Dial
@@ -422,6 +430,7 @@ func buildGenericConfig(
 	versionedInformers clientgoinformers.SharedInformerFactory,
 	insecureServingInfo *genericapiserver.DeprecatedInsecureServingInfo,
 	serviceResolver aggregatorapiserver.ServiceResolver,
+	serviceResolverPostStartHook genericapiserver.PostStartHookFunc,
 	pluginInitializers []admission.PluginInitializer,
 	admissionPostStartHook genericapiserver.PostStartHookFunc,
 	storageFactory *serverstorage.DefaultStorageFactory,
@@ -518,7 +527,7 @@ func buildGenericConfig(
 		LoopbackClientConfig: genericConfig.LoopbackClientConfig,
 		CloudConfigFile:      s.CloudProvider.CloudConfigFile,
 	}
-	serviceResolver = buildServiceResolver(s.EnableAggregatorRouting, genericConfig.LoopbackClientConfig.Host, versionedInformers)
+	serviceResolver, serviceResolverPostStartHook = buildServiceResolver(s.EnableAggregatorRouting, genericConfig.LoopbackClientConfig.Host, versionedInformers)
 
 	authInfoResolverWrapper := webhook.NewDefaultAuthenticationInfoResolverWrapper(proxyTransport, genericConfig.EgressSelector, genericConfig.LoopbackClientConfig)
 
@@ -725,12 +734,20 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	return options, nil
 }
 
-func buildServiceResolver(enabledAggregatorRouting bool, hostname string, informer clientgoinformers.SharedInformerFactory) webhook.ServiceResolver {
+func buildServiceResolver(enabledAggregatorRouting bool, hostname string, informer clientgoinformers.SharedInformerFactory) (webhook.ServiceResolver, genericapiserver.PostStartHookFunc) {
 	var serviceResolver webhook.ServiceResolver
+	var serviceResolverPostStartHook func(context genericapiserver.PostStartHookContext) error
 	if enabledAggregatorRouting {
-		serviceResolver = aggregatorapiserver.NewEndpointServiceResolver(
+		fd := failuredetector.NewDefaultFailureDetector()
+		serviceResolverPostStartHook = func(context genericapiserver.PostStartHookContext) error {
+			// TODO: wire context to PostStartHookContext or change the method signature to accept a chan
+			go fd.Run(gcontext.TODO())
+			return nil
+		}
+		serviceResolver = aggregatorapiserver.NewEndpointServiceResolverWithFailureDetector(
 			informer.Core().V1().Services().Lister(),
 			informer.Core().V1().Endpoints().Lister(),
+			fd,
 		)
 	} else {
 		serviceResolver = aggregatorapiserver.NewClusterIPServiceResolver(
@@ -741,7 +758,7 @@ func buildServiceResolver(enabledAggregatorRouting bool, hostname string, inform
 	if localHost, err := url.Parse(hostname); err == nil {
 		serviceResolver = aggregatorapiserver.NewLoopbackServiceResolver(serviceResolver, localHost)
 	}
-	return serviceResolver
+	return serviceResolver, serviceResolverPostStartHook
 }
 
 func getServiceIPAndRanges(serviceClusterIPRanges string) (net.IP, net.IPNet, net.IPNet, error) {
