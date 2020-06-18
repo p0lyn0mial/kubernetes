@@ -17,21 +17,27 @@ limitations under the License.
 package apiserver
 
 import (
+	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/websocket"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
-
-	"golang.org/x/net/websocket"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/proxy"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/authentication/user"
@@ -40,11 +46,16 @@ import (
 	"k8s.io/utils/pointer"
 )
 
+var startGC = make(chan struct{})
+var lock = sync.Mutex{}
+var counter = 0
+
 type targetHTTPHandler struct {
 	called  bool
 	headers map[string][]string
 	path    string
 	host    string
+	proto   string
 }
 
 func (d *targetHTTPHandler) Reset() {
@@ -52,13 +63,23 @@ func (d *targetHTTPHandler) Reset() {
 	d.called = false
 	d.headers = nil
 	d.host = ""
+	d.proto = ""
 }
 
 func (d *targetHTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	lock.Lock()
+	counter++
+	if counter == 25 {
+		startGC <- struct{}{}
+	}
+	lock.Unlock()
 	d.path = r.URL.Path
 	d.called = true
 	d.headers = r.Header
 	d.host = r.Host
+	d.proto = r.Proto
+	time.Sleep(60 * time.Second)
+	w.Write([]byte("hello from the backend"))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -565,4 +586,170 @@ func TestGetContextForNewRequest(t *testing.T) {
 		t.Error(string(body))
 	}
 
+}
+
+// valid for localhost
+var backendCrt = []byte(`-----BEGIN CERTIFICATE-----
+MIIC5TCCAc2gAwIBAgIJAOS8kx4rqQxcMA0GCSqGSIb3DQEBCwUAMBQxEjAQBgNV
+BAMMCWxvY2FsaG9zdDAeFw0yMDA2MTUxMTE2MDFaFw0yMDA3MTUxMTE2MDFaMBQx
+EjAQBgNVBAMMCWxvY2FsaG9zdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoC
+ggEBAPL7bdiu1h8BadQPn5tgN4cBbMLmP8jpNduoC7KExbtKz7mdbCi7t5/vRgEq
+tEgJqcsBbCCZzAYQHExkRqchaiVOQf1JvYywHSJ0IQ9IpIB4WwZiRitKsBoUwufn
+ekpvHNOUwKbjQWdxCz26sCSgDsLNK2COmJwFoTFUQWuC0X1SYsT5KqnJwTMP19Xq
+GFI0sWsZoQxe7QhJBYu8ierA+OkS0yZiBvFX8Cb1ChjUA3D1Bred2eNSZSafij2z
+ZsvpAQea7lUmRVAJe/+HHGgptXiHR+voWh5LnI+SGTfRIjgXSogc6rSlkDxBL3qs
+BSOKoiF8sy9WkowY8FKGGQkMmJcCAwEAAaM6MDgwFAYDVR0RBA0wC4IJbG9jYWxo
+b3N0MAsGA1UdDwQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATANBgkqhkiG9w0B
+AQsFAAOCAQEAvqdSHV2OAY36Xwe+5egq2oH98zfxTyp9hgsIO/8VJf/ukw+sSKFY
+ZEl3ABzjHk9BDyLLoj6DjvjHva6Ghk/ruYg9Q312+dkn/RRCuKx2cOUSq+SFZxra
+Lv4BMO8miiPeVmvP1klhqZZMCV7qpC/MdVVn3SgGYB9ymhGQa0iE0scUk1+zDNIg
+p7iHbi227WZ/pROEFt8sSf1MltaQ/0QI9G2yCxDgjPSNte8vCqVDbXZkXBE5i6qF
+TbvIk4/K13UC3YAgfhedNzf5Smbe6moK008BCp7itKL6IDb20gI9htBsgzolT8O+
+G5lxVI5gSU/VdcGjW0EyWcKEct4LZMUTCg==
+-----END CERTIFICATE-----
+`)
+
+var backendKey = []byte(`-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDy+23YrtYfAWnU
+D5+bYDeHAWzC5j/I6TXbqAuyhMW7Ss+5nWwou7ef70YBKrRICanLAWwgmcwGEBxM
+ZEanIWolTkH9Sb2MsB0idCEPSKSAeFsGYkYrSrAaFMLn53pKbxzTlMCm40FncQs9
+urAkoA7CzStgjpicBaExVEFrgtF9UmLE+SqpycEzD9fV6hhSNLFrGaEMXu0ISQWL
+vInqwPjpEtMmYgbxV/Am9QoY1ANw9Qa3ndnjUmUmn4o9s2bL6QEHmu5VJkVQCXv/
+hxxoKbV4h0fr6FoeS5yPkhk30SI4F0qIHOq0pZA8QS96rAUjiqIhfLMvVpKMGPBS
+hhkJDJiXAgMBAAECggEAIreyFkfE6GE3Ucl5sKWqyWt2stJbQsWvoFb+dN9rsTsb
+OxY3IgrQTdXOVtRXNgPLcuodHPtcn3El2fRp8+9eTz5DR4GFx9hSEV4uaxSiDIkl
+2F+qTv049EELKD92xbPiloimjjHiYnlQdd161YDZGxRdoko9m+1h/r5fKpFihVk8
+5H6RaGb2hga6iuIvAoZ0sGPOIchSOOXC0Dpz7AimSW8JnE2aWNlRu/jiBQ9RxhAr
+WP5Ey2FpNqgQfD22pbx3Ql7ULdFV2GP4owo3eWDbvHtIq+Q9WibE7zfWTtBuTKYu
+oeo2e8mkKR83KmtqWzLRGEgxDvzwT/fk8ldoiSZewQKBgQD8kdEYrqyJA6kGCrQY
+YjX8BXu+c4fkm3yxwGLJiA7RExckQ5smxy1Fzl4I4PApxWStOWxm5Uh2s0xSbDW3
+TnRyuzVq5XehQiB5vFzPgU3ywKLy4hXrKxSotH/k6yHQMF4QJZaPpkxPQNIbdN03
+6yntrdNB4sUxpYbrtAeSYaqziQKBgQD2SEbbOOO6Zl96KAiQ0D3v7vP86H4gjyLV
+w1VDiyRCPimHbT3kCNKQZMQdKPssvf3ie6JBMNQc0K3lkzU2qvihI6jOb6QK6QIF
+5eqySPDV7ZysU4CaFHSLXg6pyJ5XB+3Y8mmxnEm6EmpeOuI+4MCZ5zcFR1+kIRHU
+ORzLGERDHwKBgQDKHXJjuxyNBKXVFOmr/aPPyx+Md+2OjrMJl7g2KDAbNZi2R3e4
+X3mmPA/aMQ9fjfwT9zj9WoxTmQYBi2CtERZ03cVQhtLl9AIDCS6IS6RyF6AOl8gM
+ikwc+VzDdzp23M3ZRAspZ133qhq5KBsDbaf+8LR3LB67rQe8RTQt+wRcaQKBgQDE
+BS7wWU1YFRc1IRwANt61U5k62MlanNJ7FWeNxPdtChD/y0EReLwvVSSKmQ2hxO6I
+DyNLg9Ovw6BFM2+NPXN6vekjtdP5IxALJb4xfMDDZMXomuWmvVUtgAVnuVfdqV/z
+5q2dQemkgffLXE6rATQKyu8N8or7FZ8dLP/v3jamvQKBgER5Rr91lvS2HFXow8Rg
+tAmpti96MRH0SK2gdAoT7Xr9hsqqC8dAtgAdF+jzeecQk5IaNlGS0SRQpCdMIvE1
+Qy8OUgg/TEsBhDpg4FbFXwqlOE1PVsV+HNw578YHkOkamSH1rxTW9EJI8h+aiwqr
+Yw8ovJTCPLC33LushxKas9hY
+-----END PRIVATE KEY-----
+`)
+
+
+func TestClientRetriesIntegration(t *testing.T) {
+	testCases := map[string]struct {
+		APIService *apiregistration.APIService
+	}{
+		"happy path: HTTP/2.0 established test->backend": {
+			APIService: &apiregistration.APIService{
+				Spec: apiregistration.APIServiceSpec{
+					CABundle: testCACrt,
+					Group:    "mygroup",
+					Version:  "v1",
+					Service:  &apiregistration.ServiceReference{Name: "test-service", Namespace: "test-ns", Port: pointer.Int32Ptr(443)},
+				},
+				Status: apiregistration.APIServiceStatus{
+					Conditions: []apiregistration.APIServiceCondition{
+						{Type: apiregistration.Available, Status: apiregistration.ConditionTrue},
+					},
+				},
+			},
+		},
+	}
+
+	for name, testCase := range testCases {
+		testCaseName := name
+		path := "/apis/" + testCase.APIService.Spec.Group + "/" + testCase.APIService.Spec.Version + "/foo"
+
+		func() {
+			// set up the backend server
+			backendHandler := &targetHTTPHandler{}
+			backendServer := httptest.NewUnstartedServer(backendHandler)
+			backendCert, err := tls.X509KeyPair(backendCrt, backendKey)
+			if err != nil {
+				t.Fatalf("backend: invalid x509/key pair: %v", err)
+			}
+			backendServer.TLS = &tls.Config{
+				Certificates: []tls.Certificate{backendCert},
+				NextProtos:   []string{http2.NextProtoTLS},
+			}
+			backendServer.StartTLS()
+			defer backendServer.Close()
+
+			// set up the client
+			clientCACertPool := x509.NewCertPool()
+			clientCACertPool.AppendCertsFromPEM(backendCrt)
+			clientTLSConfig := &tls.Config{
+				RootCAs:    clientCACertPool,
+				NextProtos: []string{http2.NextProtoTLS},
+			}
+			client := &http.Client{}
+			// this is what client-go does to set up a transport - https://github.com/kubernetes/kubernetes/blob/master/staging/src/k8s.io/client-go/transport/cache.go#L114
+			client.Transport = utilnet.SetTransportDefaults(&http.Transport{
+				TLSHandshakeTimeout: 10 * time.Second,
+				TLSClientConfig:     clientTLSConfig,
+			})
+
+			sendRequest := func(wg *sync.WaitGroup) {
+				defer func() {
+					wg.Done()
+				}()
+				// act
+				resp, err := client.Get(fmt.Sprintf("https://localhost:%d%s", backendServer.Listener.Addr().(*net.TCPAddr).Port, path))
+				if err != nil {
+					t.Errorf("%s: %v", testCaseName, err)
+					return
+				}
+
+				// validate
+				defer resp.Body.Close()
+				body, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					t.Errorf("%s: %v", testCaseName, err)
+				}
+				t.Logf("body %s", body)
+
+				if resp.StatusCode != 200 {
+					t.Errorf("unexpected HTTP staus: %v, expected: 200", resp.StatusCode)
+				}
+				expectedProto := "HTTP/2.0"
+				if resp.Proto != expectedProto {
+					t.Errorf("unexpected response proto: %v, expected: %v", resp.Proto, expectedProto)
+				}
+				if backendHandler.proto != expectedProto {
+					t.Errorf("unexpected backend (aggregator->backend) proto: %v, expected: %v", backendHandler.proto, expectedProto)
+				}
+			}
+
+			wg := sync.WaitGroup{}
+	        wg.Add(1)
+			go func() {
+				<-startGC
+				time.Sleep(5*time.Second) // gives the last connection a chance to go into the sleep state
+				go func () {
+					time.Sleep(2*time.Second) // make sure we start Shutdown()
+					// This request will be send to the server after receiving: "Transport received GOAWAY len=8 LastStreamID=49 ErrCode=NO_ERROR Debug="""
+					// http2: Transport failed to get client conn for localhost:54417: http2: no cached connection was available
+					// http2: Transport failed to get client conn for localhost:54417: http2: no cached connection was available
+					// http2: Transport failed to get client conn for localhost:54417: http2: no cached connection was available
+					// dial tcp 127.0.0.1:54417: connect: connection refused
+					sendRequest(&wg)
+				}()
+
+				// Requires https://github.com/p0lyn0mial/go/commit/092f906e948288a6c3ace3a63c7fe31b05f91e28 to work properly
+				backendServer.Config.Shutdown(context.Background())
+			}()
+
+			wg.Add(25)
+			for i := 0; i < 25; i++ {
+				go sendRequest(&wg)
+			}
+
+			wg.Wait()
+		}()
+	}
 }
