@@ -98,6 +98,13 @@ func (c *DynamicServingCertificateController) GetConfigForClient(clientHello *tl
 
 	// if the client set SNI information, just use our "normal" SNI flow
 	if len(clientHello.ServerName) > 0 {
+		klog.Infof("GetConfigForClient: The client specified ServerName = %v, performing normal SNI flow", clientHello.ServerName)
+		if cert, found := tlsConfigCopy.NameToCertificate[clientHello.ServerName]; !found {
+			klog.Infof("GetConfigForClient: The client specified ServerName = %v, but didn't find a corresponding cert in NameToCertificate", clientHello.ServerName)
+		} else {
+			servingCert, _ := x509.ParseCertificate(cert.Certificate[0])
+			klog.Infof("GetConfigForClient: ServerName %v will be served  %v", clientHello.ServerName, GetHumanCertDetail(servingCert))
+		}
 		return tlsConfigCopy, nil
 	}
 
@@ -105,15 +112,24 @@ func (c *DynamicServingCertificateController) GetConfigForClient(clientHello *tl
 	// a certificate from our list if we specifically handle that IP.  This can happen when an IP is specifically mapped by name.
 	host, _, err := net.SplitHostPort(clientHello.Conn.LocalAddr().String())
 	if err != nil {
+		klog.Infof("GetConfigForClient: Unable to find host, err = %v", err)
 		return tlsConfigCopy, nil
 	}
 
 	ipCert, ok := tlsConfigCopy.NameToCertificate[host]
 	if !ok {
+		klog.Infof("GetConfigForClient: Didn't find a certificate for host = %v", host)
+		if len(tlsConfigCopy.Certificates) > 0 {
+			servingCert, _ := x509.ParseCertificate(tlsConfigCopy.Certificates[0].Certificate[0])
+			klog.Infof("GetConfigForClient: Host %v will be served = %v, ", host, GetHumanCertDetail(servingCert))
+		}
 		return tlsConfigCopy, nil
 	}
 	tlsConfigCopy.Certificates = []tls.Certificate{*ipCert}
 	tlsConfigCopy.NameToCertificate = nil
+	klog.Infof("GetConfigForClient: Found a certificate for host = %v", host)
+	servingCert, _ := x509.ParseCertificate(ipCert.Certificate[0])
+	klog.Infof("GetConfigForClient: Serving cert [%v] for host = %v, ", host, GetHumanCertDetail(servingCert))
 
 	return tlsConfigCopy, nil
 }
