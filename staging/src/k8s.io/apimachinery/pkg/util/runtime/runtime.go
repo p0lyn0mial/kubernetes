@@ -18,11 +18,11 @@ package runtime
 
 import (
 	"fmt"
-	"net/http"
 	"runtime"
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/klog/v2"
 )
 
@@ -59,7 +59,7 @@ func HandleCrash(additionalHandlers ...func(interface{})) {
 
 // logPanic logs the caller tree when a panic occurs (except in the special case of http.ErrAbortHandler).
 func logPanic(r interface{}) {
-	if r == http.ErrAbortHandler {
+	if net.IsAbortHandlerError(r) {
 		// honor the http.ErrAbortHandler sentinel panic value:
 		//   ErrAbortHandler is a sentinel panic value to abort a handler.
 		//   While any panic from ServeHTTP aborts the response to the client,

@@ -33,10 +33,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 func TestGetClientIP(t *testing.T) {
@@ -401,8 +401,8 @@ func TestConnectWithRedirects(t *testing.T) {
 			}
 
 			netdialer := &net.Dialer{
-				Timeout:   wait.ForeverTestTimeout,
-				KeepAlive: wait.ForeverTestTimeout,
+				Timeout:   time.Second * 30,
+				KeepAlive: time.Second * 30,
 			}
 			dialer := DialerFunc(func(req *http.Request) (net.Conn, error) {
 				conn, err := netdialer.Dial("tcp", req.URL.Host)

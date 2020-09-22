@@ -37,6 +37,7 @@ import (
 	metav1beta1 "k8s.io/apimachinery/pkg/apis/meta/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	"k8s.io/apiserver/pkg/endpoints/handlers/fieldmanager"
@@ -225,7 +226,7 @@ func finishRequest(timeout time.Duration, fn resultFunc) (result runtime.Object,
 			panicReason := recover()
 			if panicReason != nil {
 				// do not wrap the sentinel ErrAbortHandler panic value
-				if panicReason != http.ErrAbortHandler {
+				if !net.IsAbortHandlerError(panicReason) {
 					// Same as stdlib http server code. Manually allocate stack
 					// trace buffer size to prevent excessively large logs
 					const size = 64 << 10

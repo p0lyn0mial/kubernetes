@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 
 	"strings"
@@ -454,4 +455,24 @@ func ChooseBindAddressForInterface(intfName string) (net.IP, error) {
 		}
 	}
 	return nil, fmt.Errorf("unable to select an IP from %s network interface", intfName)
+}
+
+// AbortHandlerErrors holds a list of errors that signal the API server to abort and HTTP handler.
+// Errors on that list have are handled differently,
+// for example they suppress logging of a stack trace to the server's error log
+var AbortHandlerErrors = []error{http.ErrAbortHandler}
+
+// IsAbortHandlerError determines if the given error is on the AbortHandlerErrors list.
+// Errors on that list signal the API server to abort an HTTP handler and have special treatment.
+// For example they suppress logging of a stack trace to the server's error log
+func IsAbortHandlerError(rawError interface{}) bool {
+	if rawError == nil {
+		return false
+	}
+	for _, knownAbortError := range AbortHandlerErrors {
+		if rawError == knownAbortError {
+			return true
+		}
+	}
+	return false
 }

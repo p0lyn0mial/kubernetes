@@ -19,16 +19,16 @@ package filters
 import (
 	"net/http"
 
-	"k8s.io/klog/v2"
-
+	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/server/httplog"
+	"k8s.io/klog/v2"
 )
 
 // WithPanicRecovery wraps an http Handler to recover and log panics (except in the special case of http.ErrAbortHandler panics, which suppress logging).
 func WithPanicRecovery(handler http.Handler, isTerminating func() bool) http.Handler {
 	return withPanicRecovery(handler, func(w http.ResponseWriter, req *http.Request, err interface{}) {
-		if err == http.ErrAbortHandler {
+		if net.IsAbortHandlerError(err) {
 			// honor the http.ErrAbortHandler sentinel panic value:
 			//   ErrAbortHandler is a sentinel panic value to abort a handler.
 			//   While any panic from ServeHTTP aborts the response to the client,

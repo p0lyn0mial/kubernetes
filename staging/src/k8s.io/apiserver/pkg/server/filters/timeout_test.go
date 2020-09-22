@@ -17,11 +17,14 @@ limitations under the License.
 package filters
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -33,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/diff"
 	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/klog/v2"
 )
 
 type recorder struct {
@@ -173,5 +177,64 @@ func TestTimeout(t *testing.T) {
 		}
 	case <-time.After(30 * time.Second):
 		t.Fatalf("expected to see a handler panic, but didn't")
+	}
+}
+
+func TestErrConnKilled(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("unable to setup the test, err %v", err)
+	}
+	//stdout := os.Stdout
+	stderr := os.Stderr
+	origReallyCrash := runtime.ReallyCrash
+	runtime.ReallyCrash = false
+	cleanUp := func() {
+		os.Stderr = stderr
+		klog.LogToStderr(false)
+		writer.Close()
+
+		runtime.ReallyCrash = origReallyCrash
+	}
+	defer cleanUp()
+	os.Stderr = writer
+	var buf bytes.Buffer
+	go func() {
+		io.Copy(&buf, reader)
+	}()
+	klog.LogToStderr(true)
+	expectedRsp := "hello from the handler"
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// this error must be ignored by the WithPanicRecovery handler
+		// it is thrown by WithTimeoutForNonLongRunningRequests handler when a response has been already sent to the client and the handler timed out
+		// panicking with errConnKilled also suppresses logging of a stack trace to the server's error log.
+		w.Write([]byte("hello from the handler"))
+		panic(errConnKilled)
+	})
+
+	ts := httptest.NewServer(WithPanicRecovery(handler, nil))
+	defer ts.Close()
+
+	res, err := http.Get(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// note that the status code is set by the net/http library on w.Write
+	// since calling WriteHeader multiple times is not supported it cannot be changed
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("got res.StatusCode %d; expected %d", res.StatusCode, http.StatusOK)
+	}
+	body, _ := ioutil.ReadAll(res.Body)
+	if string(body) != expectedRsp {
+		t.Errorf("got unexpected rsp: %q, expected %q", body, expectedRsp)
+	}
+	cleanUp()
+	data, err := ioutil.ReadAll(&buf)
+	if err != nil {
+		t.Fatalf("unable to read the captured std output, err %v", err)
+	}
+	capturedOutput := string(data)
+	if len(capturedOutput) != 0 {
+		t.Errorf("unexpected ouput captured\n%v", capturedOutput)
 	}
 }

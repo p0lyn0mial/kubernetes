@@ -28,12 +28,20 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	knet "k8s.io/apimachinery/pkg/util/net"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apiserver/pkg/endpoints/metrics"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 )
 
+// errConnKilled is thrown when a response has been already sent to the client and the handler timed out
+// note that panicking with errConnKilled also suppresses logging of a stack trace to the server's error log.
+// see also knet.AbortHandlerErrors
 var errConnKilled = fmt.Errorf("killing connection/stream because serving request timed out and response had been started")
+
+func init() {
+	knet.AbortHandlerErrors = append(knet.AbortHandlerErrors, errConnKilled)
+}
 
 // WithTimeoutForNonLongRunningRequests times out non-long-running requests after the time given by timeout.
 func WithTimeoutForNonLongRunningRequests(handler http.Handler, longRunning apirequest.LongRunningRequestCheck, timeout time.Duration) http.Handler {
@@ -100,7 +108,7 @@ func (t *timeoutHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			err := recover()
 			// do not wrap the sentinel ErrAbortHandler panic value
-			if err != nil && err != http.ErrAbortHandler {
+			if err != nil && !knet.IsAbortHandlerError(err) {
 				// Same as stdlib http server code. Manually allocate stack
 				// trace buffer size to prevent excessively large logs
 				const size = 64 << 10
