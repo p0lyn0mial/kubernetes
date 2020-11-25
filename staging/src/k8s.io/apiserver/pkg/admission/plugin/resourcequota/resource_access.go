@@ -29,6 +29,8 @@ import (
 	"k8s.io/apiserver/pkg/storage/etcd3"
 	"k8s.io/client-go/kubernetes"
 	corev1listers "k8s.io/client-go/listers/core/v1"
+
+	"k8s.io/klog/v2"
 )
 
 // QuotaAccessor abstracts the get/set logic from the rest of the Evaluator.  This could be a test stub, a straight passthrough,
@@ -110,6 +112,7 @@ func (e *quotaAccessor) checkCache(quota *corev1.ResourceQuota) *corev1.Resource
 }
 
 func (e *quotaAccessor) GetQuotas(namespace string) ([]corev1.ResourceQuota, error) {
+	klog.Infof("GetQuotas called, for %s", namespace)
 	// determine if there are any quotas in this namespace
 	// if there are no quotas, we don't need to do anything
 	items, err := e.lister.ResourceQuotas(namespace).List(labels.Everything())
@@ -119,6 +122,7 @@ func (e *quotaAccessor) GetQuotas(namespace string) ([]corev1.ResourceQuota, err
 
 	// if there are no items held in our indexer, check our live-lookup LRU, if that misses, do the live lookup to prime it.
 	if len(items) == 0 {
+		klog.Infof("no items in the lister, checking LRU cache for %s", namespace)
 		lruItemObj, ok := e.liveLookupCache.Get(namespace)
 		if !ok || lruItemObj.(liveLookupEntry).expiry.Before(time.Now()) {
 			// TODO: If there are multiple operations at the same time and cache has just expired,
@@ -126,10 +130,12 @@ func (e *quotaAccessor) GetQuotas(namespace string) ([]corev1.ResourceQuota, err
 			// If there is already in-flight List() for a given namespace, we should wait until
 			// it is finished and cache is updated instead of doing the same, also to avoid
 			// throttling - see #22422 for details.
+			klog.Infof("doing live lookup for RQ in %s", namespace)
 			liveList, err := e.client.CoreV1().ResourceQuotas(namespace).List(context.TODO(), metav1.ListOptions{})
 			if err != nil {
 				return nil, err
 			}
+			klog.Infof("live lookup for RQ in %s done, got %d items", namespace, len(liveList.Items))
 			newEntry := liveLookupEntry{expiry: time.Now().Add(e.liveTTL)}
 			for i := range liveList.Items {
 				newEntry.items = append(newEntry.items, &liveList.Items[i])

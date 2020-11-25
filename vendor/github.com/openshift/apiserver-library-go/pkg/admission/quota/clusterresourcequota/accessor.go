@@ -6,6 +6,7 @@ import (
 
 	lru "github.com/hashicorp/golang-lru"
 
+	"k8s.io/klog/v2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	kapierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -60,6 +61,9 @@ func newQuotaAccessor(
 // UpdateQuotaStatus the newQuota coming in will be incremented from the original.  The difference between the original
 // and the new is the amount to add to the namespace total, but the total status is the used value itself
 func (e *clusterQuotaAccessor) UpdateQuotaStatus(newQuota *corev1.ResourceQuota) error {
+	klog.Infof("clusterQuotaAccessor, UpdateQuotaStatus called for %s", newQuota.Name)
+	defer klog.Infof("clusterQuotaAccessor, UpdateQuotaStatus eneded for %s", newQuota.Name)
+	
 	clusterQuota, err := e.clusterQuotaLister.Get(newQuota.Name)
 	if err != nil {
 		return err
@@ -117,10 +121,14 @@ func (e *clusterQuotaAccessor) checkCache(clusterQuota *quotav1.ClusterResourceQ
 }
 
 func (e *clusterQuotaAccessor) GetQuotas(namespaceName string) ([]corev1.ResourceQuota, error) {
+	klog.Infof("clusterQuotaAccessor GetQuotas called for %s", namespaceName)
+	
+	klog.Infof("clusterQuotaAccessor waitForReadyClusterQuotaNames for %s", namespaceName)
 	clusterQuotaNames, err := e.waitForReadyClusterQuotaNames(namespaceName)
 	if err != nil {
 		return nil, err
 	}
+	klog.Infof("clusterQuotaAccessor CRQN ready for %s, CRQN = %d", namespaceName, len(clusterQuotaNames))
 
 	resourceQuotas := []corev1.ResourceQuota{}
 	for _, clusterQuotaName := range clusterQuotaNames {
@@ -144,6 +152,7 @@ func (e *clusterQuotaAccessor) GetQuotas(namespaceName string) ([]corev1.Resourc
 
 	}
 
+	klog.Infof("clusterQuotaAccessor GetQuotas ended for %s, returning %d RQs", namespaceName, len(resourceQuotas))
 	return resourceQuotas, nil
 }
 

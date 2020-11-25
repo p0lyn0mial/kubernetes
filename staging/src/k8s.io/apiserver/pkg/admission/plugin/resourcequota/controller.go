@@ -155,7 +155,9 @@ func (e *quotaEvaluator) doWork() {
 		if len(admissionAttributes) == 0 {
 			return false
 		}
+		klog.Infof("quotaEvaluator: got work for %s", ns)
 		e.checkAttributes(ns, admissionAttributes)
+		defer klog.Infof("quotaEvaluator: done work for %s", ns)
 		return false
 	}
 	for {
@@ -174,6 +176,7 @@ func (e *quotaEvaluator) checkAttributes(ns string, admissionAttributes []*admis
 		for _, admissionAttribute := range admissionAttributes {
 			close(admissionAttribute.finished)
 		}
+		klog.Infof("quotaEvaluator, all waiters for %s finished", ns)
 	}()
 
 	quotas, err := e.quotaAccessor.GetQuotas(ns)
@@ -183,20 +186,24 @@ func (e *quotaEvaluator) checkAttributes(ns string, admissionAttributes []*admis
 		}
 		return
 	}
+	klog.Infof("quotaEvaluator, quotaAccessor.GetQuotas returned %d", len(quotas))
 	// if limited resources are disabled, we can just return safely when there are no quotas.
 	limitedResourcesDisabled := len(e.config.LimitedResources) == 0
 	if len(quotas) == 0 && limitedResourcesDisabled {
 		for _, admissionAttribute := range admissionAttributes {
 			admissionAttribute.result = nil
 		}
+		klog.Infof("quotaEvaluator, no rq and limitedResourcesDisabled for %s", ns)
 		return
 	}
 
 	if e.lockAcquisitionFunc != nil {
+		klog.Infof("quotaEvaluator, lock function not empty for %s", ns)
 		releaseLocks := e.lockAcquisitionFunc(quotas)
 		defer releaseLocks()
 	}
 
+	klog.Infof("quotaEvaluator, calling checkQuotas for %s", ns)
 	e.checkQuotas(quotas, admissionAttributes, 3)
 }
 
@@ -618,6 +625,7 @@ func (e *quotaEvaluator) Evaluate(a admission.Attributes) error {
 	select {
 	case <-waiter.finished:
 	case <-time.After(10 * time.Second):
+		klog.Info("quotaEvaluator, timing out after 10s for %s", a.GetNamespace())
 		return apierrors.NewInternalError(fmt.Errorf("resource quota evaluation timed out"))
 	}
 
