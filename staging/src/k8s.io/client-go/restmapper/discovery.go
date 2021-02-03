@@ -18,6 +18,8 @@ package restmapper
 
 import (
 	"fmt"
+	"context"
+	"k8s.io/klog"
 	"strings"
 	"sync"
 
@@ -144,8 +146,8 @@ func NewDiscoveryRESTMapper(groupResources []*APIGroupResources) meta.RESTMapper
 
 // GetAPIGroupResources uses the provided discovery client to gather
 // discovery information and populate a slice of APIGroupResources.
-func GetAPIGroupResources(cl discovery.DiscoveryInterface) ([]*APIGroupResources, error) {
-	gs, rs, err := cl.ServerGroupsAndResources()
+func GetAPIGroupResources(ctx context.Context, cl discovery.DiscoveryInterface) ([]*APIGroupResources, error) {
+	gs, rs, err := cl.ServerGroupsAndResources() // TODO: pass ctx here
 	if rs == nil || gs == nil {
 		return nil, err
 		// TODO track the errors and update callers to handle partial errors.
@@ -191,7 +193,7 @@ func NewDeferredDiscoveryRESTMapper(cl discovery.CachedDiscoveryInterface) *Defe
 	}
 }
 
-func (d *DeferredDiscoveryRESTMapper) getDelegate() (meta.RESTMapper, error) {
+func (d *DeferredDiscoveryRESTMapper) getDelegate(ctx context.Context) (meta.RESTMapper, error) {
 	d.initMu.Lock()
 	defer d.initMu.Unlock()
 
@@ -199,7 +201,7 @@ func (d *DeferredDiscoveryRESTMapper) getDelegate() (meta.RESTMapper, error) {
 		return d.delegate, nil
 	}
 
-	groupResources, err := GetAPIGroupResources(d.cl)
+	groupResources, err := GetAPIGroupResources(ctx, d.cl)
 	if err != nil {
 		return nil, err
 	}
@@ -222,75 +224,75 @@ func (d *DeferredDiscoveryRESTMapper) Reset() {
 
 // KindFor takes a partial resource and returns back the single match.
 // It returns an error if there are multiple matches.
-func (d *DeferredDiscoveryRESTMapper) KindFor(resource schema.GroupVersionResource) (gvk schema.GroupVersionKind, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) KindFor(ctx context.Context, resource schema.GroupVersionResource) (gvk schema.GroupVersionKind, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return schema.GroupVersionKind{}, err
 	}
 	gvk, err = del.KindFor(resource)
 	if err != nil && !d.cl.Fresh() {
 		d.Reset()
-		gvk, err = d.KindFor(resource)
+		gvk, err = d.KindFor(ctx, resource)
 	}
 	return
 }
 
 // KindsFor takes a partial resource and returns back the list of
 // potential kinds in priority order.
-func (d *DeferredDiscoveryRESTMapper) KindsFor(resource schema.GroupVersionResource) (gvks []schema.GroupVersionKind, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) KindsFor(ctx context.Context, resource schema.GroupVersionResource) (gvks []schema.GroupVersionKind, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	gvks, err = del.KindsFor(resource)
 	if len(gvks) == 0 && !d.cl.Fresh() {
 		d.Reset()
-		gvks, err = d.KindsFor(resource)
+		gvks, err = d.KindsFor(ctx, resource)
 	}
 	return
 }
 
 // ResourceFor takes a partial resource and returns back the single
 // match. It returns an error if there are multiple matches.
-func (d *DeferredDiscoveryRESTMapper) ResourceFor(input schema.GroupVersionResource) (gvr schema.GroupVersionResource, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) ResourceFor(ctx context.Context, input schema.GroupVersionResource) (gvr schema.GroupVersionResource, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return schema.GroupVersionResource{}, err
 	}
 	gvr, err = del.ResourceFor(input)
 	if err != nil && !d.cl.Fresh() {
 		d.Reset()
-		gvr, err = d.ResourceFor(input)
+		gvr, err = d.ResourceFor(ctx, input)
 	}
 	return
 }
 
 // ResourcesFor takes a partial resource and returns back the list of
 // potential resource in priority order.
-func (d *DeferredDiscoveryRESTMapper) ResourcesFor(input schema.GroupVersionResource) (gvrs []schema.GroupVersionResource, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) ResourcesFor(ctx context.Context, input schema.GroupVersionResource) (gvrs []schema.GroupVersionResource, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	gvrs, err = del.ResourcesFor(input)
 	if len(gvrs) == 0 && !d.cl.Fresh() {
 		d.Reset()
-		gvrs, err = d.ResourcesFor(input)
+		gvrs, err = d.ResourcesFor(ctx, input)
 	}
 	return
 }
 
 // RESTMapping identifies a preferred resource mapping for the
 // provided group kind.
-func (d *DeferredDiscoveryRESTMapper) RESTMapping(gk schema.GroupKind, versions ...string) (m *meta.RESTMapping, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) RESTMapping(ctx context.Context, gk schema.GroupKind, versions ...string) (m *meta.RESTMapping, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	m, err = del.RESTMapping(gk, versions...)
 	if err != nil && !d.cl.Fresh() {
 		d.Reset()
-		m, err = d.RESTMapping(gk, versions...)
+		m, err = d.RESTMapping(ctx, gk, versions...)
 	}
 	return
 }
@@ -298,36 +300,36 @@ func (d *DeferredDiscoveryRESTMapper) RESTMapping(gk schema.GroupKind, versions 
 // RESTMappings returns the RESTMappings for the provided group kind
 // in a rough internal preferred order. If no kind is found, it will
 // return a NoResourceMatchError.
-func (d *DeferredDiscoveryRESTMapper) RESTMappings(gk schema.GroupKind, versions ...string) (ms []*meta.RESTMapping, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) RESTMappings(ctx context.Context, gk schema.GroupKind, versions ...string) (ms []*meta.RESTMapping, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return nil, err
 	}
 	ms, err = del.RESTMappings(gk, versions...)
 	if len(ms) == 0 && !d.cl.Fresh() {
 		d.Reset()
-		ms, err = d.RESTMappings(gk, versions...)
+		ms, err = d.RESTMappings(ctx, gk, versions...)
 	}
 	return
 }
 
 // ResourceSingularizer converts a resource name from plural to
 // singular (e.g., from pods to pod).
-func (d *DeferredDiscoveryRESTMapper) ResourceSingularizer(resource string) (singular string, err error) {
-	del, err := d.getDelegate()
+func (d *DeferredDiscoveryRESTMapper) ResourceSingularizer(ctx context.Context, resource string) (singular string, err error) {
+	del, err := d.getDelegate(ctx)
 	if err != nil {
 		return resource, err
 	}
 	singular, err = del.ResourceSingularizer(resource)
 	if err != nil && !d.cl.Fresh() {
 		d.Reset()
-		singular, err = d.ResourceSingularizer(resource)
+		singular, err = d.ResourceSingularizer(ctx, resource)
 	}
 	return
 }
 
 func (d *DeferredDiscoveryRESTMapper) String() string {
-	del, err := d.getDelegate()
+	del, err := d.getDelegate(context.TODO())
 	if err != nil {
 		return fmt.Sprintf("DeferredDiscoveryRESTMapper{%v}", err)
 	}

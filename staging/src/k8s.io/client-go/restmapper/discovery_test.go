@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"context"
 
 	"github.com/davecgh/go-spew/spew"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -249,7 +250,7 @@ func TestDeferredDiscoveryRESTMapper_CacheMiss(t *testing.T) {
 	assert.False(cdc.fresh, "should NOT be fresh after instantiation")
 	assert.Zero(cdc.invalidateCalls, "should not have called Invalidate()")
 
-	gvk, err := m.KindFor(schema.GroupVersionResource{
+	gvk, err := m.KindFor(context.TODO(), schema.GroupVersionResource{
 		Group:    "a",
 		Version:  "v1",
 		Resource: "foo",
@@ -259,7 +260,7 @@ func TestDeferredDiscoveryRESTMapper_CacheMiss(t *testing.T) {
 	assert.Equal(cdc.invalidateCalls, 1, "should have called Invalidate() once")
 	assert.Equal(gvk.Kind, "Foo")
 
-	gvk, err = m.KindFor(schema.GroupVersionResource{
+	gvk, err = m.KindFor(context.TODO(), schema.GroupVersionResource{
 		Group:    "a",
 		Version:  "v1",
 		Resource: "foo",
@@ -267,7 +268,7 @@ func TestDeferredDiscoveryRESTMapper_CacheMiss(t *testing.T) {
 	assert.NoError(err)
 	assert.Equal(cdc.invalidateCalls, 1, "should NOT have called Invalidate() again")
 
-	gvk, err = m.KindFor(schema.GroupVersionResource{
+	gvk, err = m.KindFor(context.TODO(), schema.GroupVersionResource{
 		Group:    "a",
 		Version:  "v1",
 		Resource: "bar",
@@ -276,7 +277,7 @@ func TestDeferredDiscoveryRESTMapper_CacheMiss(t *testing.T) {
 	assert.Equal(cdc.invalidateCalls, 1, "should NOT have called Invalidate() again after another cache-miss, but with fresh==true")
 
 	cdc.fresh = false
-	gvk, err = m.KindFor(schema.GroupVersionResource{
+	gvk, err = m.KindFor(context.TODO(), schema.GroupVersionResource{
 		Group:    "a",
 		Version:  "v1",
 		Resource: "bar",
@@ -356,7 +357,7 @@ func TestGetAPIGroupResources(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := GetAPIGroupResources(test.discovery)
+			got, err := GetAPIGroupResources(context.TODO(), test.discovery)
 			if err == nil && test.expectedError != nil {
 				t.Fatalf("expected error %q, but got none", test.expectedError)
 			} else if err != nil && test.expectedError == nil {

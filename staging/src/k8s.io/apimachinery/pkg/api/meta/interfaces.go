@@ -17,6 +17,8 @@ limitations under the License.
 package meta
 
 import (
+	"context"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -112,23 +114,23 @@ type RESTMapping struct {
 // TODO: split into sub-interfaces
 type RESTMapper interface {
 	// KindFor takes a partial resource and returns the single match.  Returns an error if there are multiple matches
-	KindFor(resource schema.GroupVersionResource) (schema.GroupVersionKind, error)
+	KindFor(ctx context.Context, resource schema.GroupVersionResource) (schema.GroupVersionKind, error)
 
 	// KindsFor takes a partial resource and returns the list of potential kinds in priority order
-	KindsFor(resource schema.GroupVersionResource) ([]schema.GroupVersionKind, error)
+	KindsFor(ctx context.Context, resource schema.GroupVersionResource) ([]schema.GroupVersionKind, error)
 
 	// ResourceFor takes a partial resource and returns the single match.  Returns an error if there are multiple matches
-	ResourceFor(input schema.GroupVersionResource) (schema.GroupVersionResource, error)
+	ResourceFor(ctx context.Context, input schema.GroupVersionResource) (schema.GroupVersionResource, error)
 
 	// ResourcesFor takes a partial resource and returns the list of potential resource in priority order
-	ResourcesFor(input schema.GroupVersionResource) ([]schema.GroupVersionResource, error)
+	ResourcesFor(ctx context.Context, input schema.GroupVersionResource) ([]schema.GroupVersionResource, error)
 
 	// RESTMapping identifies a preferred resource mapping for the provided group kind.
-	RESTMapping(gk schema.GroupKind, versions ...string) (*RESTMapping, error)
+	RESTMapping(ctx context.Context, gk schema.GroupKind, versions ...string) (*RESTMapping, error)
 	// RESTMappings returns all resource mappings for the provided group kind if no
 	// version search is provided. Otherwise identifies a preferred resource mapping for
 	// the provided version(s).
-	RESTMappings(gk schema.GroupKind, versions ...string) ([]*RESTMapping, error)
+	RESTMappings(ctx context.Context, gk schema.GroupKind, versions ...string) ([]*RESTMapping, error)
 
-	ResourceSingularizer(resource string) (singular string, err error)
+	ResourceSingularizer(ctx context.Context, resource string) (singular string, err error)
 }
