@@ -69,10 +69,10 @@ var (
 
 // RequestTotal increments the total number of requests for the delegated authorization.
 func RequestTotal(ctx context.Context, code, verb string) {
-	requestTotal.WithContext(ctx).WithLabelValues(code, verb).Add(1)
+	requestTotal.WithLabelValues(code, verb).Add(1)
 }
 
 // RequestLatency measures request latency in seconds for the delegated authorization. Broken down by status code and verb.
 func RequestLatency(ctx context.Context, latency float64, code, verb string) {
-	requestLatency.WithContext(ctx).WithLabelValues(code, verb).Observe(latency)
+	requestLatency.WithLabelValues(code, verb).Observe(latency)
 }
