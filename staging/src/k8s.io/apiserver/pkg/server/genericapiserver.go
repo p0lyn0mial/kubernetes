@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	goruntime "runtime"
 
 	systemd "github.com/coreos/go-systemd/daemon"
 	"github.com/go-openapi/spec"
@@ -217,6 +218,9 @@ type GenericAPIServer struct {
 	// EventSink creates events.
 	eventSink EventSink
 	eventRef  *corev1.ObjectReference
+
+	// TODO: better name
+	ShutDownInProgressCh chan struct{}
 }
 
 // DelegationTarget is an interface which allows for composition of API servers with top level handling that works
@@ -336,8 +340,12 @@ func (s *GenericAPIServer) PrepareRun() preparedGenericAPIServer {
 func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	delayedStopCh := make(chan struct{})
 
+	s.ShutdownDelayDuration = 30 * time.Second
+
+
 	go func() {
 		defer close(delayedStopCh)
+		defer close(s.ShutDownInProgressCh)
 
 		<-stopCh
 
@@ -351,6 +359,26 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 		time.Sleep(s.ShutdownDelayDuration)
 
 		s.Eventf(corev1.EventTypeNormal, "TerminationMinimalShutdownDurationFinished", "The minimal shutdown duration of %v finished", s.ShutdownDelayDuration)
+
+		{
+			go func() {
+				time.Sleep( 3 * time.Minute + 30 * time.Second)
+				n := 512
+				buf := make([]byte, n)
+				for {
+					m := goruntime.Stack(buf, true)
+					if m < n {
+						buf = buf[:m]
+						break
+					}
+					n *= 2
+					buf = make([]byte, n)
+				}
+				klog.Info( "=== Begin stack trace")
+				klog.Info( string(buf))
+				klog.Info("=== End stack trace")
+			}()
+		}
 	}()
 
 	lateStopCh := make(chan struct{})
@@ -477,6 +505,10 @@ func (s *GenericAPIServer) installAPIResources(apiPrefix string, apiGroupInfo *A
 		}
 
 		apiGroupVersion.MaxRequestBodyBytes = s.maxRequestBodyBytes
+		if apiGroupVersion.ShutDownInProgressCh == nil {
+			klog.Infof("Termination: GS: install API Resources ShutDownInProgressCh is nil for %v", apiGroupVersion.GroupVersion.String())
+			apiGroupVersion.ShutDownInProgressCh = s.ShutDownInProgressCh
+		}
 
 		r, err := apiGroupVersion.InstallREST(s.Handler.GoRestfulContainer)
 		if err != nil {
@@ -606,6 +638,8 @@ func (s *GenericAPIServer) newAPIGroupVersion(apiGroupInfo *APIGroupInfo, groupV
 		Admit:             s.admissionControl,
 		MinRequestTimeout: s.minRequestTimeout,
 		Authorizer:        s.Authorizer,
+
+		ShutDownInProgressCh: s.ShutDownInProgressCh,
 	}
 }
 

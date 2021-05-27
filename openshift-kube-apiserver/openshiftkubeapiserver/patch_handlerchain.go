@@ -43,6 +43,9 @@ func BuildHandlerChain(consolePublicURL string, oauthMetadataFile string, deprec
 			// we rate limit watches after building the regular handler chain so we have the context information
 			handler = withWatchRateLimit(handler)
 
+			//
+			handler = withLongRunningRequestTermination(handler, genericConfig)
+
 			// after normal chain, so that user is in context
 			handler = patchfilters.WithDeprecatedApiRequestLogging(handler, deprecatedAPIRequestController)
 
@@ -59,6 +62,62 @@ func BuildHandlerChain(consolePublicURL string, oauthMetadataFile string, deprec
 		},
 
 		nil
+}
+
+func withLongRunningRequestTermination(handler http.Handler, genericConfig *genericapiserver.Config) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
+		requestInfo, found := request.RequestInfoFrom(req.Context())
+		if !found {
+			handler.ServeHTTP(w, req)
+			return
+		}
+
+		//isWatchReq := genericapiserverfilters.BasicLongRunningRequestCheck(sets.NewString("watch"), sets.NewString())
+		// TODO: add openshift specific requests
+		// TODO: can LongRunningFunc be nil?!
+		isLongRunning := genericConfig.LongRunningFunc(req, requestInfo)
+		if !isLongRunning {
+			handler.ServeHTTP(w, req)
+			return
+		}
+
+		ctx, cancelCtxFn := context.WithCancel(req.Context())
+		defer cancelCtxFn()
+		req = req.WithContext(ctx)
+
+		doneErrCh := make(chan interface{}, 2)
+		// todo: close doneErrCh
+		go func() {
+			// todo: handle crash
+			select {
+			case <-genericConfig.ShutDownInProgressCh:
+				cancelCtxFn()
+				select {
+				case <-time.After(5 * time.Second):
+					doneErrCh <- http.ErrAbortHandler
+				}
+			case <-req.Context().Done():
+				return
+			}
+		}()
+
+		go func() {
+			// todo: handle crash
+			defer func() {
+				err := recover()
+				doneErrCh <- err
+			}()
+			handler.ServeHTTP(w, req)
+			doneErrCh <- nil
+		}()
+
+		err := <-doneErrCh
+		if err != nil {
+			panic(err)
+		}
+
+	})
 }
 
 // If we know the location of the asset server, redirect to it when / is requested

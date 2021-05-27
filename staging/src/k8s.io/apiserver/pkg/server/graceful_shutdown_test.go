@@ -36,11 +36,13 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	apitesting "k8s.io/apiserver/pkg/endpoints/testing"
 	genericapitesting "k8s.io/apiserver/pkg/endpoints/testing"
+	"k8s.io/utils/pointer"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -103,8 +105,6 @@ f+pC77R3PW/o7oClJ+/GYIMy5AfkCaRjX1RLf+vhAoGBANJBi0ARkhwOWbnD2urA
 6jp9pqrqmibtGEIpQi4D9IM8Zo9mc8GexCf0x+11mamC+ZXjT+bvLQzbcJGnG5CL
 W+S7SneWTL09leh5ATNhog6s
 -----END PRIVATE KEY-----`)
-
-
 
 var testAPIGroup = "test.group"
 var testAPIGroup2 = "test.group2"
@@ -214,7 +214,6 @@ type watchJSON struct {
 	Object json.RawMessage `json:"object,omitempty"`
 }
 
-
 type fakeTimeoutFactory struct {
 	timeoutCh chan time.Time
 	done      chan struct{}
@@ -246,6 +245,7 @@ func TestGracefulShutdownForWatchRequest(t *testing.T) {
 	watcher := watch.NewFake()
 	timeoutCh := make(chan time.Time)
 	done := make(chan struct{})
+	shutDownInProgress := make(chan struct{})
 
 	info, ok := runtime.SerializerInfoForMediaType(codecs.SupportedMediaTypes(), runtime.ContentTypeJSON)
 	if !ok || info.StreamSerializer == nil {
@@ -255,6 +255,7 @@ func TestGracefulShutdownForWatchRequest(t *testing.T) {
 
 	// Setup a new watchserver
 	watchServer := &handlers.WatchServer{
+		//Scope: &handlers.RequestScope{ShutDownInProgressCh: shutDownInProgress},
 		Scope:    &handlers.RequestScope{},
 		Watching: watcher,
 
@@ -267,10 +268,39 @@ func TestGracefulShutdownForWatchRequest(t *testing.T) {
 		TimeoutFactory: &fakeTimeoutFactory{timeoutCh, done},
 	}
 
+	logRT := func(handler http.Handler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			finished := pointer.Int32Ptr(0)
+			ctx, cancelCtxFn := context.WithCancel(r.Context())
+			defer cancelCtxFn()
+			r = r.WithContext(ctx)
+			go func() {
+				select {
+				case <-shutDownInProgress:
+					cancelCtxFn()
+					select {
+					case <-time.After(5 * time.Second):
+						if atomic.CompareAndSwapInt32(finished, 0, 1) {
+							panic(http.ErrAbortHandler)
+						}
+					}
+				case <-r.Context().Done():
+					return
+				}
+
+			}()
+			handler.ServeHTTP(w, r)
+			atomic.CompareAndSwapInt32(finished, 0, 1)
+			time.Sleep(10 * time.Second)
+		}
+	}
 
 	// set up the backend server
-	backendServer := httptest.NewUnstartedServer(serveWatch(watcher, watchServer, nil))
+	backendServer := httptest.NewUnstartedServer(logRT(serveWatch(watcher, watchServer, nil)))
 	backendServer.EnableHTTP2 = true
+	backendServer.Config.ConnState = func(conn net.Conn, cs http.ConnState) {
+		fmt.Println("Client:", conn.RemoteAddr(), "- new state:", cs)
+	}
 	backendCert, err := tls.X509KeyPair(backendCrt, backendKey)
 	if err != nil {
 		t.Fatalf("backend: invalid x509/key pair: %v", err)
@@ -308,50 +338,67 @@ func TestGracefulShutdownForWatchRequest(t *testing.T) {
 	// Make sure we can actually watch an endpoint
 	decoder := json.NewDecoder(resp.Body)
 	//go func() {
-		//for {
+	//for {
+	var got watchJSON
+	err = decoder.Decode(&got)
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	fmt.Println(fmt.Sprintf("got %v", got))
+
+	senderCh := make(chan struct{})
+	go func() {
+		for {
+			if watcher.IsStopped() {
+				return
+			}
 			var got watchJSON
+			watcher.Add(&apitesting.Simple{TypeMeta: metav1.TypeMeta{APIVersion: newGroupVersion.String()}})
 			err = decoder.Decode(&got)
 			if err != nil {
-				t.Fatalf("Unexpected error: %v", err)
+				t.Errorf("Unexpected error: %v", err)
 			}
-			fmt.Println(fmt.Sprintf("got %v", got))
-			//watcher.Add(&apitesting.Simple{TypeMeta: metav1.TypeMeta{APIVersion: newGroupVersion.String()}})
-		//}
-	//}()
+			select {
+			case <-senderCh:
+				return
+			default:
+
+			}
+			//fmt.Println(fmt.Sprintf("got %v", got.Type))
+		}
+	}()
 	//time.Sleep(1 * time.Second)
 	fmt.Println(fmt.Sprintf("%v: stopping HTTP server %v", time.Now(), time.Now()))
-	ctx, cancel := context.WithTimeout(context.Background(), 3 * time.Minute)
+	go func() {
+		time.Sleep(5 * time.Second)
+		//fmt.Println("closing shutDownInProgress ")
+		close(shutDownInProgress)
+
+		/*{
+			n := 512
+			buf := make([]byte, n)
+			for {
+				m := goruntime.Stack(buf, true)
+				if m < n {
+					buf = buf[:m]
+					break
+				}
+				n *= 2
+				buf = make([]byte, n)
+			}
+			fmt.Println( fmt.Sprintf("=== Begin stack trace"))
+			fmt.Println( fmt.Sprintf(string(buf)))
+			fmt.Println(fmt.Sprintf("=== End stack trace"))
+		}*/
+		//panic("kurewa")
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	err = backendServer.Config.Shutdown(ctx)
 	cancel()
 	fmt.Println(fmt.Sprintf("%v: the HTTP server stopped, err = %v", err, time.Now()))
-
-	// Timeout and check for leaks
-	// close(timeoutCh)
-	/* select {
-	case <-done:
-		eventCh := watcher.ResultChan()
-		select {
-		case _, opened := <-eventCh:
-			if opened {
-				t.Errorf("Watcher received unexpected event")
-			}
-			if !watcher.IsStopped() {
-				t.Errorf("Watcher is not stopped")
-			}
-		case <-time.After(wait.ForeverTestTimeout):
-			t.Errorf("Leaked watch on timeout")
-		}
-	case <-time.After(wait.ForeverTestTimeout):
-		t.Errorf("Failed to stop watcher after %s of timeout signal", wait.ForeverTestTimeout.String())
-	}*/
-
-	// Make sure we can't receive any more events through the timeout watch
-	//err = decoder.Decode(&got)
-	//if err != io.EOF {
-		//t.Errorf("Unexpected non-error")
-	//}
+	close(senderCh)
+	time.Sleep(3 * time.Second)
 }
-
 
 func TestGracefulShutdownForHijackedConnection(t *testing.T) {
 	t.Skip()

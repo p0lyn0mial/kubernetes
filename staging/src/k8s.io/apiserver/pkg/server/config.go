@@ -247,6 +247,9 @@ type Config struct {
 
 	// A func that returns whether the server is terminating. This can be nil.
 	IsTerminating func() bool
+
+	// TODO: better name
+	ShutDownInProgressCh chan struct{}
 }
 
 // EventSink allows to create events.
@@ -361,6 +364,8 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 		StorageVersionManager: storageversion.NewDefaultManager(),
 
 		hasBeenReadyCh: make(chan struct{}),
+
+		ShutDownInProgressCh: make(chan struct{}),
 	}
 }
 
@@ -623,7 +628,9 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 	handlerChainBuilder := func(handler http.Handler) http.Handler {
 		return c.BuildHandlerChainFunc(handler, c.Config)
 	}
+
 	apiServerHandler := NewAPIServerHandler(name, c.Serializer, handlerChainBuilder, delegationTarget.UnprotectedHandler())
+	apiServerHandler.shutDownInProgressCh = c.ShutDownInProgressCh
 
 	s := &GenericAPIServer{
 		discoveryAddresses:         c.DiscoveryAddresses,
@@ -670,8 +677,10 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		StorageVersionManager: c.StorageVersionManager,
 
 		eventSink: c.EventSink,
-	}
 
+		ShutDownInProgressCh: c.ShutDownInProgressCh,
+	}
+	
 	ref, err := eventReference()
 	if err != nil {
 		klog.Warningf("Failed to derive event reference, won't create events: %v", err)

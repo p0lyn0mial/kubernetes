@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"k8s.io/apiserver/pkg/features"
+	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -59,13 +60,23 @@ func StreamObject(statusCode int, gv schema.GroupVersion, s runtime.NegotiatedSe
 	}
 	defer out.Close()
 
+	defer klog.Infof("Termination: streaming ended for %v", req.URL)
+
 	if wsstream.IsWebSocketRequest(req) {
+		klog.Infof("Termination: streaming (ws) for %v", req.URL)
 		r := wsstream.NewReader(out, true, wsstream.NewDefaultReaderProtocols())
 		if err := r.Copy(w, req); err != nil {
 			utilruntime.HandleError(fmt.Errorf("error encountered while streaming results via websocket: %v", err))
 		}
 		return
 	}
+
+	klog.Infof("Termination: streaming for %v", req.URL)
+	go func() {
+		<-req.Context().Done()
+		klog.Infof("Termination: streaming closing (sr) for %v", req.URL)
+		out.Close()
+	}()
 
 	if len(contentType) == 0 {
 		contentType = "application/octet-stream"

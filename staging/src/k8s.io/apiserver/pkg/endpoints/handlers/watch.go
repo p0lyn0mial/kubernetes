@@ -33,6 +33,7 @@ import (
 	"k8s.io/apiserver/pkg/endpoints/metrics"
 	"k8s.io/apiserver/pkg/server/httplog"
 	"k8s.io/apiserver/pkg/util/wsstream"
+	"k8s.io/klog/v2"
 
 	"golang.org/x/net/websocket"
 )
@@ -157,18 +158,31 @@ type WatchServer struct {
 	Fixup func(runtime.Object) runtime.Object
 
 	TimeoutFactory TimeoutFactory
+
+	url string
 }
 
 // ServeHTTP serves a series of encoded events via HTTP with Transfer-Encoding: chunked
 // or over a websocket connection.
 func (s *WatchServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+
+	//ctx, cancelCtxFn := context.WithCancel(req.Context())
+	//req = req.WithContext(ctx)
+	//defer cancelCtxFn()
+
 	kind := s.Scope.Kind
 	metrics.RegisteredWatchers.WithContext(req.Context()).WithLabelValues(kind.Group, kind.Version, kind.Kind).Inc()
 	defer metrics.RegisteredWatchers.WithContext(req.Context()).WithLabelValues(kind.Group, kind.Version, kind.Kind).Dec()
 
 	w = httplog.Unlogged(req, w)
+	s.url = req.URL.String()
+
+	if s.Scope.ShutDownInProgressCh == nil {
+		klog.Infof("Termination: watch stop chan is nil for %v gv %v", req.URL, s.Scope.Kind.GroupVersion().String())
+	}
 
 	if wsstream.IsWebSocketRequest(req) {
+		klog.Infof("WebSocket: url %v", req.URL)
 		w.Header().Set("Content-Type", s.MediaType)
 		websocket.Handler(s.HandleWS).ServeHTTP(w, req)
 		return
@@ -207,10 +221,46 @@ func (s *WatchServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	outEvent := &metav1.WatchEvent{}
 	buf := &bytes.Buffer{}
 	ch := s.Watching.ResultChan()
+
+
+
+
 	done := req.Context().Done()
+	shutdownInProgressCh := s.Scope.ShutDownInProgressCh
+
+
+	//ua := req.Header.Get("User-Agent")
+
+	/*
+	defer func() {
+		klog.Infof("Termination: watch ended for %v, ua %v", req.URL, ua)
+	}()
+	klog.Infof("Termination watch started for %v, ua %v", req.URL, ua)*/
+	/*go func () {
+		select {
+		case <-shutdownInProgressCh:
+			//cancelCtxFn()
+			//klog.Infof("Termination: watch signal received (go) canceling for %v, ua %v", req.URL, ua)
+			select {
+			case <-done:
+				return
+			case <-timeoutCh:
+				return
+			case <-time.After(5 * time.Second):
+				//klog.Infof("Termination: watch killing for %v, ua %v", req.URL, ua)
+				panic(http.ErrAbortHandler)
+			}
+		case <-done:
+			return
+		case <-timeoutCh:
+			return
+		}
+	}()*/
 
 	for {
 		select {
+		case <-shutdownInProgressCh:
+			return
 		case <-done:
 			return
 		case <-timeoutCh:
@@ -247,6 +297,7 @@ func (s *WatchServer) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				// client disconnect.
 				return
 			}
+
 			if err := e.Encode(outEvent); err != nil {
 				utilruntime.HandleError(fmt.Errorf("unable to encode watch object %T: %v (%#v)", outEvent, err, e))
 				// client disconnect.
@@ -280,9 +331,13 @@ func (s *WatchServer) HandleWS(ws *websocket.Conn) {
 	buf := &bytes.Buffer{}
 	streamBuf := &bytes.Buffer{}
 	ch := s.Watching.ResultChan()
+	shutdownInProgressCh := s.Scope.ShutDownInProgressCh
 
 	for {
 		select {
+		case <-shutdownInProgressCh:
+			klog.Infof("Termination: websocket closing for %v", s.url)
+			return
 		case <-done:
 			return
 		case event, ok := <-ch:

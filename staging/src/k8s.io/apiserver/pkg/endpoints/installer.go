@@ -46,6 +46,7 @@ import (
 	"k8s.io/apiserver/pkg/storageversion"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	versioninfo "k8s.io/component-base/version"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
 )
 
@@ -566,6 +567,10 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	allMediaTypes := append(mediaTypes, streamMediaTypes...)
 	ws.Produces(allMediaTypes...)
 
+	if a.group.ShutDownInProgressCh == nil {
+		klog.Infof("Termination: AI: registerResourceHandlers ShutDownInProgressCh is nil for %v", a.group.GroupVersion.String())
+	}
+
 	kubeVerbs := map[string]struct{}{}
 	reqScope := handlers.RequestScope{
 		Serializer:      a.group.Serializer,
@@ -592,6 +597,8 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		MetaGroupVersion: metav1.SchemeGroupVersion,
 
 		MaxRequestBodyBytes: a.group.MaxRequestBodyBytes,
+
+		ShutDownInProgressCh: a.group.ShutDownInProgressCh,
 	}
 	if a.group.MetaGroupVersion != nil {
 		reqScope.MetaGroupVersion = *a.group.MetaGroupVersion
@@ -906,6 +913,9 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			routes = append(routes, route)
 		// deprecated in 1.11
 		case "WATCH": // Watch a resource.
+		    if reqScope.ShutDownInProgressCh == nil {
+		    	klog.Infof("Termination: installer watch ShutDownInProgressCh is nil for %v", reqScope.Kind.GroupVersion().String())
+			}
 			doc := "watch changes to an object of kind " + kind
 			if isSubresource {
 				doc = "watch changes to " + subresource + " of an object of kind " + kind
@@ -1187,6 +1197,9 @@ func isVowel(c rune) bool {
 }
 
 func restfulListResource(r rest.Lister, rw rest.Watcher, scope handlers.RequestScope, forceWatch bool, minRequestTimeout time.Duration) restful.RouteFunction {
+	if scope.ShutDownInProgressCh == nil {
+		klog.Infof("Termination: restfulListResource ShutDownInProgressCh is nil for %v", scope.Kind.GroupVersion().String())
+	}
 	return func(req *restful.Request, res *restful.Response) {
 		handlers.ListResource(r, rw, &scope, forceWatch, minRequestTimeout)(res.ResponseWriter, req.Request)
 	}

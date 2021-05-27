@@ -86,6 +86,8 @@ type UpgradeAwareHandler struct {
 	MaxBytesPerSec int64
 	// Responder is passed errors that occur while setting up proxying.
 	Responder ErrorResponder
+
+	ModifyResponse func(*http.Response) error
 }
 
 const defaultFlushInterval = 200 * time.Millisecond
@@ -248,6 +250,9 @@ func (h *UpgradeAwareHandler) ServeHTTP(w http.ResponseWriter, req *http.Request
 		// the custom responder might be used for providing a unified error reporting
 		// or supporting retry mechanisms by not sending non-fatal errors to the clients
 		proxy.ErrorHandler = h.Responder.Error
+	}
+	if h.ModifyResponse != nil {
+		proxy.ModifyResponse = h.ModifyResponse
 	}
 	proxy.ServeHTTP(w, newReq)
 }

@@ -100,6 +100,8 @@ type RequestScope struct {
 	HubGroupVersion schema.GroupVersion
 
 	MaxRequestBodyBytes int64
+
+	ShutDownInProgressCh <-chan struct{}
 }
 
 func (scope *RequestScope) err(err error, w http.ResponseWriter, req *http.Request) {

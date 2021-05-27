@@ -18,12 +18,14 @@ package apiserver
 
 import (
 	"context"
+	"k8s.io/apiserver/pkg/server/filters"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/httpstream"
@@ -70,6 +72,10 @@ type proxyHandler struct {
 	// egressSelector selects the proper egress dialer to communicate with the custom apiserver
 	// overwrites proxyTransport dialer if not nil
 	egressSelector *egressselector.EgressSelector
+
+
+	// TODO: better name
+	shutDownInProgressCh chan struct{}
 }
 
 type proxyHandlingInfo struct {
@@ -109,6 +115,14 @@ func proxyError(w http.ResponseWriter, req *http.Request, error string, code int
 }
 
 func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	isWatchReq := filters.BasicLongRunningRequestCheck(sets.NewString("watch"), sets.NewString())
+
+	isLongRunningReq := filters.BasicLongRunningRequestCheck(
+		sets.NewString( "proxy"),
+		sets.NewString("attach", "exec", "proxy", "log", "portforward"),
+	)
+
+
 	value := r.handlingInfo.Load()
 	if value == nil {
 		r.localDelegate.ServeHTTP(w, req)
@@ -125,7 +139,8 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// some groupResources should always be delegated
-	if requestInfo, ok := genericapirequest.RequestInfoFrom(req.Context()); ok {
+	requestInfo, requestInfoOK := genericapirequest.RequestInfoFrom(req.Context())
+	if requestInfoOK {
 		if alwaysLocalDelegateGroupResource[schema.GroupResource{Group: requestInfo.APIGroup, Resource: requestInfo.Resource}] {
 			r.localDelegate.ServeHTTP(w, req)
 			return
@@ -185,6 +200,32 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		transport.SetAuthProxyHeaders(newReq, user.GetName(), user.GetGroups(), user.GetExtra())
 	}
 
+	if requestInfoOK {
+
+		if isWatchReq(newReq, requestInfo) {
+			klog.Infof("Termination: proxy watch for %v", newReq.URL)
+			defer klog.Infof("Termination: proxy watch ended for %v", newReq.URL)
+			//prm := proxyResponseModifier{r.shutDownInProgressCh}
+			//modifyResponse = prm.ModifyResponse
+
+			/*go func () {
+				select {
+				case <-r.shutDownInProgressCh:
+					klog.Infof("Termination: proxy watch closing for %v", newReq.URL)
+					cancelFn()
+				case <-newReq.Context().Done():
+					return
+				}
+			}()*/
+
+		}
+
+
+		if isLongRunningReq(newReq, requestInfo) {
+			klog.Infof("Termination: proxy long running req for %v", newReq.URL)
+		}
+	}
+
 	handler := proxy.NewUpgradeAwareHandler(location, proxyRoundTripper, true, upgrade, &responder{w: w})
 	handler.ServeHTTP(w, newReq)
 }
@@ -192,7 +233,7 @@ func (r *proxyHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // newRequestForProxy returns a shallow copy of the original request with a context that may include a timeout for discovery requests
 func newRequestForProxy(location *url.URL, req *http.Request) (*http.Request, context.CancelFunc) {
 	newCtx := req.Context()
-	cancelFn := func() {}
+	var cancelFn func()
 
 	if requestInfo, ok := genericapirequest.RequestInfoFrom(req.Context()); ok {
 		// trim leading and trailing slashes. Then "/apis/group/version" requests are for discovery, so if we have exactly three
@@ -206,6 +247,9 @@ func newRequestForProxy(location *url.URL, req *http.Request) (*http.Request, co
 	}
 
 	// WithContext creates a shallow clone of the request with the same context.
+	if cancelFn == nil {
+		newCtx, cancelFn = context.WithCancel(newCtx)
+	}
 	newReq := req.WithContext(newCtx)
 	newReq.Header = utilnet.CloneHeader(req.Header)
 	newReq.URL = location

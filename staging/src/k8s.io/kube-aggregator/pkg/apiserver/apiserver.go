@@ -424,6 +424,7 @@ func (s *APIAggregator) AddAPIService(apiService *v1.APIService) error {
 		proxyTransport:             s.proxyTransport,
 		serviceResolver:            s.serviceResolver,
 		egressSelector:             s.egressSelector,
+		shutDownInProgressCh: s.GenericAPIServer.ShutDownInProgressCh,
 	}
 	proxyHandler.updateAPIService(apiService)
 	if s.openAPIAggregationController != nil {

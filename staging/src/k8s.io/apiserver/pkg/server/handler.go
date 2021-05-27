@@ -17,15 +17,17 @@ limitations under the License.
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
+	"github.com/emicklei/go-restful"
+	"k8s.io/klog/v2"
+	"net"
 	"net/http"
 	rt "runtime"
 	"sort"
 	"strings"
-
-	"github.com/emicklei/go-restful"
-	"k8s.io/klog/v2"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -64,6 +66,8 @@ type APIServerHandler struct {
 	// we should consider completely removing gorestful.
 	// Other servers should only use this opaquely to delegate to an API server.
 	Director http.Handler
+
+	shutDownInProgressCh <-chan struct{}
 }
 
 // HandlerChainBuilderFn is used to wrap the GoRestfulContainer handler using the provided handler chain.
@@ -186,5 +190,53 @@ func serviceErrorHandler(s runtime.NegotiatedSerializer, serviceErr restful.Serv
 
 // ServeHTTP makes it an http.Handler
 func (a *APIServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	a.FullHandlerChain.ServeHTTP(w, r)
+	nw := newResponseWriterHijackInformer(w)
+	go func() {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-a.shutDownInProgressCh:
+			time.Sleep(3 * time.Minute)
+			select {
+			case <-r.Context().Done():
+				return
+			default:
+				if !nw.wasHijacked {
+					ua := r.Header.Get("User-Agent")
+					klog.Infof("Termination: still running (1 min after) %v, ua %v", r.URL, ua)
+				}
+			}
+		}
+	}()
+	a.FullHandlerChain.ServeHTTP(nw, r)
+}
+
+
+type responseWriter struct {
+	http.ResponseWriter
+
+	wasHijacked bool
+}
+
+// newResponseWriterHijackInformer wraps the given ResponseWrite and intercept and Hijack methods
+func newResponseWriterHijackInformer(w http.ResponseWriter) *responseWriter {
+	return &responseWriter{w,   false}
+}
+
+func (w *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	requestHijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("unable to hijack response writer: %T", w.ResponseWriter)
+	}
+
+	w.wasHijacked = true
+	return requestHijacker.Hijack()
+}
+
+func (w *responseWriter) CloseNotify() <-chan bool {
+	return w.ResponseWriter.(http.CloseNotifier).CloseNotify()
+}
+
+func (w *responseWriter) Flush() {
+	w.ResponseWriter.(http.Flusher).Flush()
 }

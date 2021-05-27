@@ -19,6 +19,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"k8s.io/apiserver/pkg/server/filters"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -28,6 +29,7 @@ import (
 	metainternalversionvalidation "k8s.io/apimachinery/pkg/apis/meta/internalversion/validation"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -62,6 +64,34 @@ func getResourceHandler(scope *RequestScope, getter getterFunc) http.HandlerFunc
 		}
 		ctx := req.Context()
 		ctx = request.WithNamespace(ctx, namespace)
+
+		{
+
+			if requestInfo, ok := request.RequestInfoFrom(ctx); ok {
+				// terminate long running GET requests
+				isLongRunningReq := filters.BasicLongRunningRequestCheck(
+					sets.NewString(""),
+					sets.NewString("log"), // GET .../pods/abc/log
+				)
+
+				if isLongRunningReq(req, requestInfo) {
+					var cancelFn context.CancelFunc
+					ctx, cancelFn = context.WithCancel(ctx)
+					req = req.WithContext(ctx)
+					defer cancelFn()
+					defer klog.Infof("Termination: get ended for %v", req.URL)
+					go func() {
+						select {
+						case <-scope.ShutDownInProgressCh:
+							klog.Infof("Termination: get closing for %v", req.URL)
+							cancelFn()
+						case <-req.Context().Done():
+							return
+						}
+					}()
+				}
+			}
+		}
 
 		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, scope)
 		if err != nil {
