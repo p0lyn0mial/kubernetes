@@ -247,6 +247,9 @@ type Config struct {
 
 	// A func that returns whether the server is terminating. This can be nil.
 	IsTerminating func() bool
+
+	// TerminationStartCh indicates whether the server is terminating.
+	TerminationStartCh chan struct{}
 }
 
 // EventSink allows to create events.
@@ -360,7 +363,8 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 		APIServerID:           id,
 		StorageVersionManager: storageversion.NewDefaultManager(),
 
-		hasBeenReadyCh: make(chan struct{}),
+		hasBeenReadyCh:     make(chan struct{}),
+		TerminationStartCh: make(chan struct{}),
 	}
 }
 
@@ -670,6 +674,8 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		StorageVersionManager: c.StorageVersionManager,
 
 		eventSink: c.EventSink,
+
+		TerminationStartCh: c.TerminationStartCh,
 	}
 
 	ref, err := eventReference()
