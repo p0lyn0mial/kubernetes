@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	authorizationv1 "github.com/openshift/api/authorization/v1"
@@ -86,37 +87,57 @@ func withLongRunningRequestTermination(handler http.Handler, genericConfig *gene
 		defer cancelCtxFn()
 		req = req.WithContext(ctx)
 
-		doneErrCh := make(chan interface{}, 2)
-		// todo: close doneErrCh
+		var wg sync.WaitGroup
+		wg.Add(2)
+		errCh := make(chan interface{})
+		defer close(errCh)
+		doneCh := make(chan struct{})
+
 		go func() {
-			// todo: handle crash
+			defer wg.Done()
+			defer func() {
+				err := recover()
+				select {
+				case errCh <- err:
+					return
+				case <-doneCh:
+					return
+				}
+			}()
 			select {
 			case <-genericConfig.ShutDownInProgressCh:
 				cancelCtxFn()
 				select {
 				case <-time.After(5 * time.Second):
-					doneErrCh <- http.ErrAbortHandler
+					panic(http.ErrAbortHandler)
+					//errCh <- http.ErrAbortHandler
 				}
-			case <-req.Context().Done():
+			case <-doneCh:
 				return
 			}
 		}()
 
 		go func() {
-			// todo: handle crash
+			defer wg.Done()
 			defer func() {
 				err := recover()
-				doneErrCh <- err
+				select {
+				case errCh <- err:
+					return
+				case <-doneCh:
+					return
+				}
 			}()
 			handler.ServeHTTP(w, req)
-			doneErrCh <- nil
+			//errCh <- nil
 		}()
 
-		err := <-doneErrCh
+		err := <-errCh
+		close(doneCh)
+		wg.Wait()
 		if err != nil {
 			panic(err)
 		}
-
 	})
 }
 

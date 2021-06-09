@@ -196,14 +196,14 @@ func (a *APIServerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-a.shutDownInProgressCh:
-			time.Sleep(3 * time.Minute)
+			time.Sleep( 15 * time.Second)
 			select {
 			case <-r.Context().Done():
 				return
 			default:
 				if !nw.wasHijacked {
 					ua := r.Header.Get("User-Agent")
-					klog.Infof("Termination: still running (1 min after) %v, ua %v", r.URL, ua)
+					klog.Infof("Termination: still running (15 sec after) %v, ua %v", r.URL, ua)
 				}
 			}
 		}

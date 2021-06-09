@@ -340,7 +340,7 @@ func (s *GenericAPIServer) PrepareRun() preparedGenericAPIServer {
 func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	delayedStopCh := make(chan struct{})
 
-	s.ShutdownDelayDuration = 30 * time.Second
+	//s.ShutdownDelayDuration = 30 * time.Second
 
 
 	go func() {
@@ -362,7 +362,8 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 
 		{
 			go func() {
-				time.Sleep( 3 * time.Minute + 30 * time.Second)
+				//time.Sleep( 3 * time.Minute + 30 * time.Second)
+				time.Sleep( 30 * time.Second)
 				n := 512
 				buf := make([]byte, n)
 				for {

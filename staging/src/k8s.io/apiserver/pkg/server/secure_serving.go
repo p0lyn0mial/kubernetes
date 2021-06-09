@@ -214,7 +214,7 @@ func RunServer(
 		return nil, fmt.Errorf("listener must not be nil")
 	}
 
-	shutDownTimeout = 4 * time.Minute
+	//shutDownTimeout = 4 * time.Minute
 
 	// Shutdown server gracefully.
 	stoppedCh := make(chan struct{})
