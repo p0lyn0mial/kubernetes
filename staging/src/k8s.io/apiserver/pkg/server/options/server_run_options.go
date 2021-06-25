@@ -54,20 +54,29 @@ type ServerRunOptions struct {
 	// apiserver library can wire it to a flag.
 	MaxRequestBodyBytes       int64
 	EnablePriorityAndFairness bool
+
+	// KeepListeningDuringGracefulTermination dictates when to initiate shutdown
+	// of the HTTP Server during the graceful termination window of the apiserver.
+	// If true, we wait for existing requests in flight to be drained
+	// and then initiate a shutdown of the HTTP Server.
+	// If false, we initiate a shutdown of the HTTP Server
+	// as soon as ShutdownDelayDuration has elapsed.
+	KeepListeningDuringGracefulTermination bool
 }
 
 func NewServerRunOptions() *ServerRunOptions {
 	defaults := server.NewConfig(serializer.CodecFactory{})
 	return &ServerRunOptions{
-		MaxRequestsInFlight:         defaults.MaxRequestsInFlight,
-		MaxMutatingRequestsInFlight: defaults.MaxMutatingRequestsInFlight,
-		RequestTimeout:              defaults.RequestTimeout,
-		LivezGracePeriod:            defaults.LivezGracePeriod,
-		MinRequestTimeout:           defaults.MinRequestTimeout,
-		ShutdownDelayDuration:       defaults.ShutdownDelayDuration,
-		JSONPatchMaxCopyBytes:       defaults.JSONPatchMaxCopyBytes,
-		MaxRequestBodyBytes:         defaults.MaxRequestBodyBytes,
-		EnablePriorityAndFairness:   true,
+		MaxRequestsInFlight:                    defaults.MaxRequestsInFlight,
+		MaxMutatingRequestsInFlight:            defaults.MaxMutatingRequestsInFlight,
+		RequestTimeout:                         defaults.RequestTimeout,
+		LivezGracePeriod:                       defaults.LivezGracePeriod,
+		MinRequestTimeout:                      defaults.MinRequestTimeout,
+		ShutdownDelayDuration:                  defaults.ShutdownDelayDuration,
+		JSONPatchMaxCopyBytes:                  defaults.JSONPatchMaxCopyBytes,
+		MaxRequestBodyBytes:                    defaults.MaxRequestBodyBytes,
+		EnablePriorityAndFairness:              true,
+		KeepListeningDuringGracefulTermination: false,
 	}
 }
 
@@ -86,6 +95,7 @@ func (s *ServerRunOptions) ApplyTo(c *server.Config) error {
 	c.JSONPatchMaxCopyBytes = s.JSONPatchMaxCopyBytes
 	c.MaxRequestBodyBytes = s.MaxRequestBodyBytes
 	c.PublicAddress = s.AdvertiseAddress
+	c.KeepListeningDuringGracefulTermination = s.KeepListeningDuringGracefulTermination
 
 	return nil
 }
@@ -244,6 +254,10 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 		"Time to delay the termination. During that time the server keeps serving requests normally. The endpoints /healthz and /livez "+
 		"will return success, but /readyz immediately returns failure. Graceful termination starts after this delay "+
 		"has elapsed. This can be used to allow load balancer to stop sending traffic to this server.")
+
+	fs.BoolVar(&s.KeepListeningDuringGracefulTermination, "keep-listening-during-shutdown", s.KeepListeningDuringGracefulTermination, ""+
+		"If true the HTTP Server will continue listening until all existing request(s) in flight have been drained, "+
+		"during this window all incoming requests will be rejected with a status code 429 and a 'Retry-After' response header.")
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(fs)
 }

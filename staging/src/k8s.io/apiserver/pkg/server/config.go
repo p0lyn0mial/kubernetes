@@ -230,6 +230,14 @@ type Config struct {
 	// it's intentionally marked private as it should never be overridden.
 	terminationSignals terminationSignals
 
+	// KeepListeningDuringGracefulTermination dictates when to initiate shutdown
+	// of the HTTP Server during the graceful termination of the apiserver.
+	// If true, we wait for existing requests in flight to be drained
+	// and then initiate a shutdown of the HTTP Server.
+	// If false, we initiate a shutdown of the HTTP Server
+	// as soon as ShutdownDelayDuration has elapsed.
+	KeepListeningDuringGracefulTermination bool
+
 	//===========================================================================
 	// values below here are targets for removal
 	//===========================================================================
@@ -614,6 +622,8 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		StorageVersionManager: c.StorageVersionManager,
 
 		Version: c.Version,
+
+		KeepListeningDuringGracefulTermination: c.KeepListeningDuringGracefulTermination,
 	}
 
 	for {
@@ -785,6 +795,9 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler = genericapifilters.WithWarningRecorder(handler)
 	handler = genericapifilters.WithCacheControl(handler)
 	handler = genericfilters.WithHSTS(handler, c.HSTSDirectives)
+	if c.KeepListeningDuringGracefulTermination {
+		handler = genericfilters.WithRetryAfter(handler, c.terminationSignals.AfterShutdownDelayDuration.Signaled())
+	}
 	handler = genericfilters.WithHTTPLogging(handler)
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
 		handler = genericapifilters.WithTracing(handler, c.TracerProvider)
