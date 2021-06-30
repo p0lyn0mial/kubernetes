@@ -19,9 +19,13 @@ package filters
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/util/rand"
 )
+
+// RetryConditionFn is a convenience type used for wrapping a retry condition for WithRetryAfter filter.
+type RetryConditionFn func() (bool, func(w http.ResponseWriter), string)
 
 // WithRetryAfter rejects any incoming new request(s) with a 429 if one of the provided conditions holds
 //
@@ -30,8 +34,16 @@ import (
 // are replied with a 429 and the following response headers:
 //   - 'Retry-After: N` (so client can retry after N seconds, hopefully on a new apiserver instance), where N is defined as [4, 12)
 //   -  any optional headers set by a condition function
-func WithRetryAfter(handler http.Handler, conditions ...func() ( /*shouldRun*/ bool /*rwMutator*/, func(w http.ResponseWriter) /*reason*/, string)) http.Handler {
+func WithRetryAfter(handler http.Handler, conditions []RetryConditionFn, excludedPaths []string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+
+		for _, excludedPath := range excludedPaths {
+			if strings.HasPrefix(req.URL.Path, excludedPath) {
+				handler.ServeHTTP(w, req)
+				return
+			}
+		}
+
 		var ok bool
 		var rwMutator func(w http.ResponseWriter)
 		var reason string
@@ -57,3 +69,41 @@ func WithRetryAfter(handler http.Handler, conditions ...func() ( /*shouldRun*/ b
 		http.Error(w, reason, http.StatusTooManyRequests)
 	})
 }
+
+// WithRetryOnShutdownDelayCondition meant to be passed to the WithRetryAfter filter
+// it rejects any incoming new request(s) with a 429 if the specified channel is closed
+// it also sets the following response header: 'Connection: close': to tear down the TCP connection
+func WithRetryOnShutdownDelayCondition(ch <-chan struct{}) RetryConditionFn {
+	return func() (bool, func(w http.ResponseWriter), string) {
+		select {
+		case <-ch:
+			return true,
+				func(rw http.ResponseWriter) {
+					// Copied from net/http2 library
+					// "Connection" headers aren't allowed in HTTP/2 (RFC 7540, 8.1.2.2),
+					// but respect "Connection" == "close" to mean sending a GOAWAY and tearing
+					// down the TCP connection when idle, like we do for HTTP/1.
+					rw.Header().Set("Connection", "close")
+				},
+				"The apiserver is shutting down, please try again later"
+		default:
+			return false, nil, ""
+		}
+	}
+}
+
+// WithRetryWhenHasNotBeenReady meant to be passed to the WithRetryAfter filter
+// it rejects any incoming new request(s) with a 429 if the specified channel is closed
+func WithRetryWhenHasNotBeenReady(ch <-chan struct{}) RetryConditionFn {
+	return func() (bool, func(w http.ResponseWriter), string) {
+		select {
+		case <-ch:
+			return false, nil, ""
+		default:
+			return true, nil, "The apiserver hasn't been fully initialized, please try again later"
+		}
+	}
+}
+
+// WithoutRetryOnThePaths holds a list of paths that are excluded from WithRetryAfter filter.
+var WithoutRetryOnThePaths = []string{"/readyz", "/livez", "/healthz", "/version"}

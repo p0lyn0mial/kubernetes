@@ -26,17 +26,15 @@ import (
 func TestWithRetryAfter(t *testing.T) {
 	tests := []struct {
 		name               string
-		notAcceptingFn     func() (bool, func(http.ResponseWriter), string)
+		notAcceptingFn     RetryConditionFn
 		handlerInvoked     int
 		closeExpected      string
 		retryAfterExpected bool
 		statusCodeExpected int
 	}{
 		{
-			name: "accepting new request",
-			notAcceptingFn: func() (bool, func(http.ResponseWriter), string) {
-				return false, nil, ""
-			},
+			name:               "accepting new request",
+			notAcceptingFn:     noopRetryCondition,
 			handlerInvoked:     1,
 			closeExpected:      "",
 			retryAfterExpected: false,
@@ -53,6 +51,7 @@ func TestWithRetryAfter(t *testing.T) {
 			statusCodeExpected: http.StatusTooManyRequests,
 		},
 		{
+			notAcceptingFn:     noopRetryCondition,
 			name:               "empty condition function",
 			handlerInvoked:     1,
 			closeExpected:      "",
@@ -68,12 +67,7 @@ func TestWithRetryAfter(t *testing.T) {
 				handlerInvoked++
 			})
 
-			var wrapped http.Handler
-			if test.notAcceptingFn != nil {
-				wrapped = WithRetryAfter(handler, test.notAcceptingFn)
-			} else {
-				wrapped = WithRetryAfter(handler)
-			}
+			wrapped := WithRetryAfter(handler, []RetryConditionFn{test.notAcceptingFn})
 
 			request, err := http.NewRequest(http.MethodGet, "/api/v1/namespaces", nil)
 			if err != nil {
@@ -112,4 +106,8 @@ func TestWithRetryAfter(t *testing.T) {
 			}
 		})
 	}
+}
+
+func noopRetryCondition() (bool, func(w http.ResponseWriter), string) {
+	return false, nil, ""
 }

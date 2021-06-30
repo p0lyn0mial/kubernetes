@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"reflect"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -413,9 +414,13 @@ func requestMustFailWithRetryHeader(t *testing.T, resultGot result, statusCodedE
 	if statusCodedExpected != resultGot.response.StatusCode {
 		t.Errorf("Expected Status Code: %d, but got: %d", statusCodedExpected, resultGot.response.StatusCode)
 	}
-	retryAfterGot := resultGot.response.Header.Get("Retry-After")
-	if retryAfterGot != "5" {
-		t.Errorf("Expected Retry-After Response Header, but got: %v", resultGot.response)
+	retryAfterGotStr := resultGot.response.Header.Get("Retry-After")
+	retryAfterGot, err := strconv.Atoi(retryAfterGotStr)
+	if err != nil {
+		t.Errorf("Incorrect value for Retry-After Header, err = %v", err)
+	}
+	if !(retryAfterGot >= 4 && retryAfterGot < 12) {
+		t.Errorf("Expected Retry-After Header to be: [4, 12), but got: %d", retryAfterGot)
 	}
 }
 
@@ -519,7 +524,7 @@ func newGenericAPIServer(t *testing.T, keepListening bool) *GenericAPIServer {
 	config.BuildHandlerChainFunc = func(apiHandler http.Handler, c *Config) http.Handler {
 		handler := genericfilters.WithWaitGroup(apiHandler, c.LongRunningFunc, c.HandlerChainWaitGroup)
 		if c.KeepListeningDuringGracefulTermination {
-			handler = genericfilters.WithRetryAfter(handler, c.terminationSignals.AfterShutdownDelayDuration.Signaled())
+			handler = genericfilters.WithRetryAfter(handler, []genericfilters.RetryConditionFn{genericfilters.WithRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled())})
 		}
 		handler = genericapifilters.WithRequestInfo(handler, c.RequestInfoResolver)
 		return handler
