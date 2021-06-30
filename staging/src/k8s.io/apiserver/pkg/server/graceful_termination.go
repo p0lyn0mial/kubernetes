@@ -129,6 +129,9 @@ type lifecycleSignals struct {
 	// HTTPServerStoppedListening termination event is signaled when the
 	// HTTP Server has stopped listening to the underlying socket.
 	HTTPServerStoppedListening lifecycleSignal
+
+	// HasBeenReady is signaled when the readyz endpoint succeeds for the first time.
+	HasBeenReady lifecycleSignal
 }
 
 // newLifecycleSignals returns an instance of lifecycleSignals interface to be used
@@ -139,6 +142,7 @@ func newLifecycleSignals() lifecycleSignals {
 		AfterShutdownDelayDuration: newNamedChannelWrapper("AfterShutdownDelayDuration"),
 		InFlightRequestsDrained:    newNamedChannelWrapper("InFlightRequestsDrained"),
 		HTTPServerStoppedListening: newNamedChannelWrapper("HTTPServerStoppedListening"),
+		HasBeenReady:               newNamedChannelWrapper("HasBeenReady"),
 	}
 }
 
