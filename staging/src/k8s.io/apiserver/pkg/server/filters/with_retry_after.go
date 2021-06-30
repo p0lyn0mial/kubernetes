@@ -17,36 +17,43 @@ limitations under the License.
 package filters
 
 import (
+	"fmt"
 	"net/http"
+
+	"k8s.io/apimachinery/pkg/util/rand"
 )
 
-// WithRetryAfter rejects any incoming new request(s) with a 429
-// if the specified shutdownDelayDurationElapsedCh channel is closed
+// WithRetryAfter rejects any incoming new request(s) with a 429 if one of the provided conditions holds
 //
 // It includes new request(s) on a new or an existing TCP connection
-// Any new request(s) arriving after shutdownDelayDurationElapsedCh is closed
+// Any new request(s) arriving after a condition fulfills
 // are replied with a 429 and the following response headers:
-//   - 'Retry-After: N` (so client can retry after N seconds, hopefully on a new apiserver instance)
-//   - 'Connection: close': tear down the TCP connection
-//
-// TODO: is there a way to merge WithWaitGroup and this filter?
-func WithRetryAfter(handler http.Handler, shutdownDelayDurationElapsedCh <-chan struct{}) http.Handler {
+//   - 'Retry-After: N` (so client can retry after N seconds, hopefully on a new apiserver instance), where N is defined as [4, 12)
+//   -  any optional headers set by a condition function
+func WithRetryAfter(handler http.Handler, conditions ...func() ( /*shouldRun*/ bool /*rwMutator*/, func(w http.ResponseWriter) /*reason*/, string)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		select {
-		case <-shutdownDelayDurationElapsedCh:
-		default:
+		var ok bool
+		var rwMutator func(w http.ResponseWriter)
+		var reason string
+		for _, conditionFn := range conditions {
+			ok, rwMutator, reason = conditionFn()
+			if ok {
+				break
+			}
+		}
+
+		if !ok {
 			handler.ServeHTTP(w, req)
 			return
 		}
 
-		// Copied from net/http2 library
-		// "Connection" headers aren't allowed in HTTP/2 (RFC 7540, 8.1.2.2),
-		// but respect "Connection" == "close" to mean sending a GOAWAY and tearing
-		// down the TCP connection when idle, like we do for HTTP/1.
-		w.Header().Set("Connection", "close")
+		if rwMutator != nil {
+			rwMutator(w)
+		}
 
-		// Return a 429 status asking the cliet to try again after 5 seconds
-		w.Header().Set("Retry-After", "5")
-		http.Error(w, "The apiserver is shutting down, please try again later.", http.StatusTooManyRequests)
+		// Return a 429 status asking the cliet to try again after [4, 12) seconds
+		retryAfter := rand.Intn(8) + 4
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+		http.Error(w, reason, http.StatusTooManyRequests)
 	})
 }

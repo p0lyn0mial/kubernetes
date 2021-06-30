@@ -19,49 +19,44 @@ package filters
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 )
 
 func TestWithRetryAfter(t *testing.T) {
 	tests := []struct {
 		name               string
-		notAccepting       func() <-chan struct{}
+		notAcceptingFn     func() (bool, func(http.ResponseWriter), string)
 		handlerInvoked     int
 		closeExpected      string
-		retryAfterExpected string
+		retryAfterExpected bool
 		statusCodeExpected int
 	}{
 		{
 			name: "accepting new request",
-			notAccepting: func() <-chan struct{} {
-				ch := make(chan struct{})
-				return ch
+			notAcceptingFn: func() (bool, func(http.ResponseWriter), string) {
+				return false, nil, ""
 			},
 			handlerInvoked:     1,
 			closeExpected:      "",
-			retryAfterExpected: "",
+			retryAfterExpected: false,
 			statusCodeExpected: http.StatusOK,
 		},
 		{
 			name: "not accepting new request",
-			notAccepting: func() <-chan struct{} {
-				ch := make(chan struct{})
-				close(ch)
-				return ch
+			notAcceptingFn: func() (bool, func(rw http.ResponseWriter), string) {
+				return true, func(rw http.ResponseWriter) { rw.Header().Set("Connection", "close") }, ""
 			},
 			handlerInvoked:     0,
 			closeExpected:      "close",
-			retryAfterExpected: "5",
+			retryAfterExpected: true,
 			statusCodeExpected: http.StatusTooManyRequests,
 		},
 		{
-			name: "nil channel",
-			notAccepting: func() <-chan struct{} {
-				return nil
-			},
+			name:               "empty condition function",
 			handlerInvoked:     1,
 			closeExpected:      "",
-			retryAfterExpected: "",
+			retryAfterExpected: false,
 			statusCodeExpected: http.StatusOK,
 		},
 	}
@@ -73,7 +68,12 @@ func TestWithRetryAfter(t *testing.T) {
 				handlerInvoked++
 			})
 
-			wrapped := WithRetryAfter(handler, test.notAccepting())
+			var wrapped http.Handler
+			if test.notAcceptingFn != nil {
+				wrapped = WithRetryAfter(handler, test.notAcceptingFn)
+			} else {
+				wrapped = WithRetryAfter(handler)
+			}
 
 			request, err := http.NewRequest(http.MethodGet, "/api/v1/namespaces", nil)
 			if err != nil {
@@ -95,9 +95,20 @@ func TestWithRetryAfter(t *testing.T) {
 				t.Errorf("expected Connection close: %s, but got: %s", test.closeExpected, closeGot)
 			}
 
-			retryAfterGot := w.Header().Get("Retry-After")
-			if test.retryAfterExpected != retryAfterGot {
-				t.Errorf("expected Retry-After: %s, but got: %s", test.retryAfterExpected, retryAfterGot)
+			retryAfterGotStr := w.Header().Get("Retry-After")
+			if len(retryAfterGotStr) > 0 && !test.retryAfterExpected {
+				t.Error("didn't expect to find Retry-After Header")
+			}
+
+			if test.retryAfterExpected {
+				retryAfterGot, err := strconv.Atoi(retryAfterGotStr)
+				if err != nil {
+					t.Error(err)
+				}
+
+				if !(retryAfterGot >= 4 && retryAfterGot < 12) {
+					t.Errorf("expected Retry-After: [4, 12), but got: %d", retryAfterGot)
+				}
 			}
 		})
 	}

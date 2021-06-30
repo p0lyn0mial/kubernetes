@@ -796,7 +796,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler = genericapifilters.WithCacheControl(handler)
 	handler = genericfilters.WithHSTS(handler, c.HSTSDirectives)
 	if c.KeepListeningDuringGracefulTermination {
-		handler = genericfilters.WithRetryAfter(handler, c.terminationSignals.AfterShutdownDelayDuration.Signaled())
+		handler = genericfilters.WithRetryAfter(handler, withRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled()))
 	}
 	handler = genericfilters.WithHTTPLogging(handler)
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
@@ -900,4 +900,29 @@ func AuthorizeClientBearerToken(loopback *restclient.Config, authn *Authenticati
 
 	tokenAuthorizer := authorizerfactory.NewPrivilegedGroups(user.SystemPrivilegedGroup)
 	authz.Authorizer = authorizerunion.New(tokenAuthorizer, authz.Authorizer)
+}
+
+// retryConditionFn is a convenience type used for wrapping a retry condition for WithRetryAfter filter.
+type retryConditionFn func() (bool, func(w http.ResponseWriter), string)
+
+// withRetryOnShutdownDelayCondition meant to be passed to the WithRetryAfter filter
+// it rejects any incoming new request(s) with a 429 if the specified shutdownDelayDurationElapsedCh channel is closed
+// it also sets the following response header: 'Connection: close': to tear down the TCP connection
+func withRetryOnShutdownDelayCondition(ch <-chan struct{}) retryConditionFn {
+	return func() (bool, func(w http.ResponseWriter), string) {
+		select {
+		case <-ch:
+			return true,
+				func(rw http.ResponseWriter) {
+					// Copied from net/http2 library
+					// "Connection" headers aren't allowed in HTTP/2 (RFC 7540, 8.1.2.2),
+					// but respect "Connection" == "close" to mean sending a GOAWAY and tearing
+					// down the TCP connection when idle, like we do for HTTP/1.
+					rw.Header().Set("Connection", "close")
+				},
+				"The apiserver is shutting down, please try again later"
+		default:
+			return false, nil, ""
+		}
+	}
 }
