@@ -346,6 +346,7 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 
 	go func() {
 		defer delayedStopCh.Signal()
+		defer klog.V(1).InfoS("[graceful-termination] shutdown event", "name", delayedStopCh.Name())
 
 		<-stopCh
 
@@ -353,6 +354,7 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 		// This gives the load balancer a window defined by ShutdownDelayDuration to detect that /readyz is red
 		// and stop sending traffic to this server.
 		shutdownInitiatedCh.Signal()
+		klog.V(1).InfoS("[graceful-termination] shutdown event", "name", shutdownInitiatedCh.Name())
 
 		time.Sleep(s.ShutdownDelayDuration)
 	}()
@@ -379,10 +381,12 @@ func (s preparedGenericAPIServer) Run(stopCh <-chan struct{}) error {
 	go func() {
 		<-listenerStoppedCh
 		httpServerStoppedListeningCh.Signal()
+		klog.V(1).InfoS("[graceful-termination] shutdown event", "name", httpServerStoppedListeningCh.Name())
 	}()
 
 	go func() {
 		defer drainedCh.Signal()
+		defer klog.V(1).InfoS("[graceful-termination] shutdown event", "name", drainedCh.Name())
 
 		// wait for the delayed stopCh before closing the handler chain (it rejects everything after Wait has been called).
 		<-delayedStopCh.Signaled()
