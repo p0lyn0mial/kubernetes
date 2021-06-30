@@ -221,6 +221,11 @@ type GenericAPIServer struct {
 	// If false, we initiate a shutdown of the HTTP Server
 	// as soon as ShutdownDelayDuration has elapsed.
 	KeepListeningDuringGracefulTermination bool
+
+	// RetryWhenHasNotBeenReady once set will retry client's requests with 429 when the server hasn't been fully initialized.
+	// This option ensures that the system stays consistent even when requests are received before the server has been initialized.
+	// In particular it prevents child deletion in case of GC or/and orphaned content in case of the namespaces controller.
+	RetryWhenHasNotBeenReady bool
 }
 
 // DelegationTarget is an interface which allows for composition of API servers with top level handling that works

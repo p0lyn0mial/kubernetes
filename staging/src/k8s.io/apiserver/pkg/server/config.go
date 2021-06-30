@@ -238,6 +238,11 @@ type Config struct {
 	// as soon as ShutdownDelayDuration has elapsed.
 	KeepListeningDuringGracefulTermination bool
 
+	// RetryWhenHasNotBeenReady once set will retry client's requests with 429 when the server hasn't been fully initialized.
+	// This option ensures that the system stays consistent even when requests are received before the server has been initialized.
+	// In particular it prevents child deletion in case of GC or/and orphaned content in case of the namespaces controller.
+	RetryWhenHasNotBeenReady bool
+
 	//===========================================================================
 	// values below here are targets for removal
 	//===========================================================================
@@ -624,6 +629,8 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		Version: c.Version,
 
 		KeepListeningDuringGracefulTermination: c.KeepListeningDuringGracefulTermination,
+
+		RetryWhenHasNotBeenReady: c.RetryWhenHasNotBeenReady,
 	}
 
 	for {
@@ -795,8 +802,11 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler = genericapifilters.WithWarningRecorder(handler)
 	handler = genericapifilters.WithCacheControl(handler)
 	handler = genericfilters.WithHSTS(handler, c.HSTSDirectives)
-	if c.KeepListeningDuringGracefulTermination {
-		handler = genericfilters.WithRetryAfter(handler, withRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled()))
+	if c.KeepListeningDuringGracefulTermination || c.RetryWhenHasNotBeenReady {
+		handler = genericfilters.WithRetryAfter(handler,
+			withRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled(), c.KeepListeningDuringGracefulTermination),
+			withRetryWhenHasNotBeenReady(c.terminationSignals.HasBeenReady.Signaled(), c.RetryWhenHasNotBeenReady),
+		)
 	}
 	handler = genericfilters.WithHTTPLogging(handler)
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) {
@@ -906,9 +916,12 @@ func AuthorizeClientBearerToken(loopback *restclient.Config, authn *Authenticati
 type retryConditionFn func() (bool, func(w http.ResponseWriter), string)
 
 // withRetryOnShutdownDelayCondition meant to be passed to the WithRetryAfter filter
-// it rejects any incoming new request(s) with a 429 if the specified shutdownDelayDurationElapsedCh channel is closed
+// it rejects any incoming new request(s) with a 429 if the specified channel is closed
 // it also sets the following response header: 'Connection: close': to tear down the TCP connection
-func withRetryOnShutdownDelayCondition(ch <-chan struct{}) retryConditionFn {
+func withRetryOnShutdownDelayCondition(ch <-chan struct{}, conditionSet bool) retryConditionFn {
+	if !conditionSet {
+		return noopRetryCondition()
+	}
 	return func() (bool, func(w http.ResponseWriter), string) {
 		select {
 		case <-ch:
@@ -924,5 +937,27 @@ func withRetryOnShutdownDelayCondition(ch <-chan struct{}) retryConditionFn {
 		default:
 			return false, nil, ""
 		}
+	}
+}
+
+// withRetryWhenHasNotBeenReady meant to be passed to the WithRetryAfter filter
+// it rejects any incoming new request(s) with a 429 if the specified channel is closed
+func withRetryWhenHasNotBeenReady(ch <-chan struct{}, conditionSet bool) retryConditionFn {
+	if !conditionSet {
+		return noopRetryCondition()
+	}
+	return func() (bool, func(w http.ResponseWriter), string) {
+		select {
+		case <-ch:
+			return true, nil, "The apiserver hasn't been fully initialized, please try again later"
+		default:
+			return false, nil, ""
+		}
+	}
+}
+
+func noopRetryCondition() retryConditionFn {
+	return func() (bool, func(w http.ResponseWriter), string) {
+		return false, nil, ""
 	}
 }

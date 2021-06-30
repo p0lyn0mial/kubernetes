@@ -62,6 +62,11 @@ type ServerRunOptions struct {
 	// If false, we initiate a shutdown of the HTTP Server
 	// as soon as ShutdownDelayDuration has elapsed.
 	KeepListeningDuringGracefulTermination bool
+
+	// RetryWhenHasNotBeenReady once set will retry client's requests with 429 when the server hasn't been fully initialized.
+	// This option ensures that the system stays consistent even when requests are received before the server has been initialized.
+	// In particular it prevents child deletion in case of GC or/and orphaned content in case of the namespaces controller.
+	RetryWhenHasNotBeenReady bool
 }
 
 func NewServerRunOptions() *ServerRunOptions {
@@ -77,6 +82,7 @@ func NewServerRunOptions() *ServerRunOptions {
 		MaxRequestBodyBytes:                    defaults.MaxRequestBodyBytes,
 		EnablePriorityAndFairness:              true,
 		KeepListeningDuringGracefulTermination: false,
+		RetryWhenHasNotBeenReady:               false,
 	}
 }
 
@@ -96,6 +102,7 @@ func (s *ServerRunOptions) ApplyTo(c *server.Config) error {
 	c.MaxRequestBodyBytes = s.MaxRequestBodyBytes
 	c.PublicAddress = s.AdvertiseAddress
 	c.KeepListeningDuringGracefulTermination = s.KeepListeningDuringGracefulTermination
+	c.RetryWhenHasNotBeenReady = s.RetryWhenHasNotBeenReady
 
 	return nil
 }
@@ -258,6 +265,11 @@ func (s *ServerRunOptions) AddUniversalFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.KeepListeningDuringGracefulTermination, "keep-listening-during-shutdown", s.KeepListeningDuringGracefulTermination, ""+
 		"If true the HTTP Server will continue listening until all existing request(s) in flight have been drained, "+
 		"during this window all incoming requests will be rejected with a status code 429 and a 'Retry-After' response header.")
+
+	fs.BoolVar(&s.RetryWhenHasNotBeenReady, "retry-when-not-ready", s.RetryWhenHasNotBeenReady, ""+
+		"If true will retry client's requests with 429 when the server hasn't been fully initialized."+
+		"This option ensures that the system stays consistent even when requests are received before the server has been initialized"+
+		"In particular it prevents child deletion in case of GC or/and orphaned content in case of the namespaces controller")
 
 	utilfeature.DefaultMutableFeatureGate.AddFlag(fs)
 }
