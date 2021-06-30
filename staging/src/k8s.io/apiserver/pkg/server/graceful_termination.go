@@ -22,7 +22,7 @@ import (
 
 /*
 We make an attempt here to identify the events that take place during
-the graceful shutdown of the apiserver.
+life cycle of the apiserver.
 
 We also identify each event with a name so we can refer to it.
 
@@ -93,8 +93,8 @@ T0 + 70s + up to 60s: InitiateHTTPServerShutdown: it's time to initiate shutdown
 
 */
 
-// terminationSignal encapsulates a named apiserver termination event
-type terminationSignal interface {
+// lifecycleSignal encapsulates a named apiserver event
+type lifecycleSignal interface {
 	// Signal signals the event, indicating that the event has occurred.
 	// Signal is idempotent, once signaled the event stays signaled and
 	// it immediately unblocks any goroutine waiting for this event.
@@ -105,37 +105,37 @@ type terminationSignal interface {
 	Signaled() <-chan struct{}
 }
 
-// terminationSignals provides an abstraction of the termination events that
-// transpire during the shutdown period of the apiserver. This abstraction makes it easy
+// lifecycleSignals provides an abstraction of the events that
+// transpire during life cycle of the apiserver. This abstraction makes it easy
 // for us to write unit tests that can verify expected graceful termination behavior.
 //
 // GenericAPIServer can use these to either:
 //  - signal that a particular termination event has transpired
 //  - wait for a designated termination event to transpire and do some action.
-type terminationSignals struct {
+type lifecycleSignals struct {
 	// ShutdownInitiated event is signaled when an apiserver shutdown has been initiated.
 	// It is signaled when the `stopCh` provided by the main goroutine
 	// receives a KILL signal and is closed as a consequence.
-	ShutdownInitiated terminationSignal
+	ShutdownInitiated lifecycleSignal
 
 	// AfterShutdownDelayDuration event is signaled as soon as ShutdownDelayDuration
 	// has elapsed since the ShutdownInitiated event.
 	// ShutdownDelayDuration allows the apiserver to delay shutdown for some time.
-	AfterShutdownDelayDuration terminationSignal
+	AfterShutdownDelayDuration lifecycleSignal
 
 	// InFlightRequestsDrained event is signaled when the existing requests
 	// in flight have completed. This is used as signal to shut down the audit backends
-	InFlightRequestsDrained terminationSignal
+	InFlightRequestsDrained lifecycleSignal
 
 	// HTTPServerStoppedListening termination event is signaled when the
 	// HTTP Server has stopped listening to the underlying socket.
-	HTTPServerStoppedListening terminationSignal
+	HTTPServerStoppedListening lifecycleSignal
 }
 
-// newTerminationSignals returns an instance of terminationSignals interface to be used
-// to coordinate graceful termination of the apiserver
-func newTerminationSignals() terminationSignals {
-	return terminationSignals{
+// newLifecycleSignals returns an instance of lifecycleSignals interface to be used
+// to coordinate life cycle of the apiserver
+func newLifecycleSignals() lifecycleSignals {
+	return lifecycleSignals{
 		ShutdownInitiated:          newNamedChannelWrapper("ShutdownInitiated"),
 		AfterShutdownDelayDuration: newNamedChannelWrapper("AfterShutdownDelayDuration"),
 		InFlightRequestsDrained:    newNamedChannelWrapper("InFlightRequestsDrained"),
@@ -143,7 +143,7 @@ func newTerminationSignals() terminationSignals {
 	}
 }
 
-func newNamedChannelWrapper(name string) terminationSignal {
+func newNamedChannelWrapper(name string) lifecycleSignal {
 	return &namedChannelWrapper{
 		name: name,
 		ch:   make(chan struct{}),

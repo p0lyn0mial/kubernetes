@@ -228,7 +228,7 @@ type Config struct {
 	// terminationSignals provides access to the various shutdown signals
 	// that happen during the graceful termination of the apiserver.
 	// it's intentionally marked private as it should never be overridden.
-	terminationSignals terminationSignals
+	terminationSignals lifecycleSignals
 
 	// KeepListeningDuringGracefulTermination dictates when to initiate shutdown
 	// of the HTTP Server during the graceful termination of the apiserver.
@@ -362,7 +362,7 @@ func NewConfig(codecs serializer.CodecFactory) *Config {
 		// Generic API servers have no inherent long-running subresources
 		LongRunningFunc:       genericfilters.BasicLongRunningRequestCheck(sets.NewString("watch"), sets.NewString()),
 		RequestWidthEstimator: flowcontrolrequest.DefaultWidthEstimator,
-		terminationSignals:    newTerminationSignals(),
+		terminationSignals:    newLifecycleSignals(),
 
 		APIServerID:           id,
 		StorageVersionManager: storageversion.NewDefaultManager(),
@@ -616,7 +616,7 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 		maxRequestBodyBytes: c.MaxRequestBodyBytes,
 		livezClock:          clock.RealClock{},
 
-		terminationSignals: c.terminationSignals,
+		lifecycleSignals: c.terminationSignals,
 
 		APIServerID:           c.APIServerID,
 		StorageVersionManager: c.StorageVersionManager,
