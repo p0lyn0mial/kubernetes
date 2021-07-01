@@ -112,7 +112,7 @@ func newStep(fn func()) *step {
 }
 
 func TestGracefulTerminationWithKeepListeningDuringGracefulTerminationDisabled(t *testing.T) {
-	s := newGenericAPIServer(t, false)
+	s := newGenericAPIServer(t, false, false)
 
 	// record the termination events in the order they are signaled
 	var signalOrderLock sync.Mutex
@@ -234,7 +234,7 @@ func TestGracefulTerminationWithKeepListeningDuringGracefulTerminationDisabled(t
 }
 
 func TestGracefulTerminationWithKeepListeningDuringGracefulTerminationEnabled(t *testing.T) {
-	s := newGenericAPIServer(t, true)
+	s := newGenericAPIServer(t, true, false)
 
 	// record the termination events in the order they are signaled
 	var signalOrderLock sync.Mutex
@@ -380,6 +380,36 @@ func TestGracefulTerminationWithKeepListeningDuringGracefulTerminationEnabled(t 
 	}()
 }
 
+func TestRetryWhenHasNotBeenReady(t *testing.T) {
+	//
+	s := newGenericAPIServer(t, false, true)
+	s.RetryWhenHasNotBeenReady = true
+	s.AddReadyzChecks(alwaysUnhealthyCheck{})
+
+	// start the API server
+	stopCh, runCompletedCh := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(runCompletedCh)
+		s.PrepareRun().Run(stopCh)
+	}()
+
+	//
+	doer := setupDoer(t, s.SecureServingInfo)
+	client := newClient(false)
+
+	//step 1: /readyz should return 500
+	resultGot := doer.Do(client, func(httptrace.GotConnInfo) {}, "/readyz?verbose=true", time.Second)
+	assertResponse(t, resultGot, http.StatusInternalServerError)
+
+	//step 2: /readyz/alwaysUnhealthyCheck should return 500
+	resultGot = doer.Do(client, func(httptrace.GotConnInfo) {}, fmt.Sprintf("/readyz/%s", alwaysUnhealthyCheck{}.Name()), time.Second)
+	assertResponse(t, resultGot, http.StatusInternalServerError)
+
+	// step 2:
+	resultGot = doer.Do(client, func(httptrace.GotConnInfo) {}, "/echo?message=unready-server-returns-429", time.Second)
+	assertResponse(t, resultGot, http.StatusTooManyRequests)
+}
+
 func shouldReuseConnection(t *testing.T) func(httptrace.GotConnInfo) {
 	return func(ci httptrace.GotConnInfo) {
 		if !ci.Reused {
@@ -517,15 +547,23 @@ func newClient(useNewConnection bool) *http.Client {
 	}
 }
 
-func newGenericAPIServer(t *testing.T, keepListening bool) *GenericAPIServer {
+func newGenericAPIServer(t *testing.T, keepListening, retryWhenNotReady bool) *GenericAPIServer {
 	config, _ := setUp(t)
 	config.ShutdownDelayDuration = 100 * time.Millisecond
 	config.KeepListeningDuringGracefulTermination = keepListening
+	config.RetryWhenHasNotBeenReady = retryWhenNotReady
 	config.BuildHandlerChainFunc = func(apiHandler http.Handler, c *Config) http.Handler {
 		handler := genericfilters.WithWaitGroup(apiHandler, c.LongRunningFunc, c.HandlerChainWaitGroup)
+
+		var retryConditions []genericfilters.RetryConditionFn
 		if c.KeepListeningDuringGracefulTermination {
-			handler = genericfilters.WithRetryAfter(handler, []genericfilters.RetryConditionFn{genericfilters.WithRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled())})
+			retryConditions = append(retryConditions, genericfilters.WithRetryOnShutdownDelayCondition(c.terminationSignals.AfterShutdownDelayDuration.Signaled()))
 		}
+		if c.RetryWhenHasNotBeenReady {
+			retryConditions = append(retryConditions, genericfilters.WithRetryWhenHasNotBeenReady(c.terminationSignals.HasBeenReady.Signaled()))
+		}
+		handler = genericfilters.WithRetryAfter(handler, retryConditions, genericfilters.WithoutRetryOnThePaths)
+
 		handler = genericapifilters.WithRequestInfo(handler, c.RequestInfoResolver)
 		return handler
 	}
@@ -571,4 +609,14 @@ func (ln wrappedListener) Accept() (net.Conn, error) {
 		ln.t.Logf("[server] seen new connection: %#v", tc)
 	}
 	return c, err
+}
+
+type alwaysUnhealthyCheck struct{}
+
+func (alwaysUnhealthyCheck) Name() string {
+	return "alwaysUnhealthyCheck"
+}
+
+func (alwaysUnhealthyCheck) Check(_ *http.Request) error {
+	return fmt.Errorf("alwaysUnhealthyCheck")
 }
