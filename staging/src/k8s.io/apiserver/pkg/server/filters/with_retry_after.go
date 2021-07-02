@@ -17,11 +17,14 @@ limitations under the License.
 package filters
 
 import (
+	"context"
 	"fmt"
+	"k8s.io/apiserver/pkg/authentication/user"
 	"net/http"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/rand"
+	"k8s.io/apiserver/pkg/authorization/authorizer"
 )
 
 // RetryConditionFn is a convenience type used for wrapping a retry condition for WithRetryAfter filter.
@@ -34,14 +37,26 @@ type RetryConditionFn func() (bool, func(w http.ResponseWriter), string)
 // are replied with a 429 and the following response headers:
 //   - 'Retry-After: N` (so client can retry after N seconds, hopefully on a new apiserver instance), where N is defined as [4, 12)
 //   -  any optional headers set by a condition function
-func WithRetryAfter(handler http.Handler, conditions []RetryConditionFn, excludedPaths []string) http.Handler {
+func WithRetryAfter(handler http.Handler, conditions []RetryConditionFn, excludedPaths []string, authorizerAttributesFunc func(ctx context.Context) (authorizer.Attributes, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-
+		// check if the current path is not explicitly excluded
 		for _, excludedPath := range excludedPaths {
 			if strings.HasPrefix(req.URL.Path, excludedPath) {
 				handler.ServeHTTP(w, req)
 				return
 			}
+		}
+
+		// always allow the loop back client
+		ctx := req.Context()
+		attribs, err := authorizerAttributesFunc(ctx)
+		if err != nil {
+			handler.ServeHTTP(w, req)
+			return
+		}
+		if attribs.GetUser().GetName() == user.APIServerUser {
+			handler.ServeHTTP(w, req)
+			return
 		}
 
 		var ok bool
@@ -106,4 +121,4 @@ func WithRetryWhenHasNotBeenReady(ch <-chan struct{}) RetryConditionFn {
 }
 
 // WithoutRetryOnThePaths holds a list of paths that are excluded from WithRetryAfter filter.
-var WithoutRetryOnThePaths = []string{"/readyz", "/livez", "/healthz", "/version"}
+var WithoutRetryOnThePaths = []string{"/readyz", "/livez", "/healthz", "/version", "/logs"}

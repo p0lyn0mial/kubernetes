@@ -811,7 +811,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 		retryConditions = append(retryConditions, genericfilters.WithRetryWhenHasNotBeenReady(c.terminationSignals.HasBeenReady.Signaled()))
 	}
 	if len(retryConditions) > 0 {
-		handler = genericfilters.WithRetryAfter(handler, retryConditions, genericfilters.WithoutRetryOnThePaths)
+		handler = genericfilters.WithRetryAfter(handler, retryConditions, genericfilters.WithoutRetryOnThePaths, genericapifilters.GetAuthorizerAttributes)
 	}
 
 	handler = genericfilters.WithHTTPLogging(handler)
