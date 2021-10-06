@@ -1149,7 +1149,7 @@ func (p *unmarshal) field(file *generator.FileDescriptor, msg *generator.Descrip
 				p.P(`m.`, fieldname, ` = append(m.`, fieldname, `, make([]byte, postIndex-iNdEx))`)
 				p.P(`copy(m.`, fieldname, `[len(m.`, fieldname, `)-1], dAtA[iNdEx:postIndex])`)
 			} else {
-				p.P(`m.`, fieldname, ` = append(m.`, fieldname, `[:0] , dAtA[iNdEx:postIndex]...)`)
+				p.P(`m.`, fieldname, ` = dAtA[iNdEx:postIndex]`)
 				p.P(`if m.`, fieldname, ` == nil {`)
 				p.In()
 				p.P(`m.`, fieldname, ` = []byte{}`)
