@@ -670,7 +670,7 @@ func (m *Unknown) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Raw = append(m.Raw[:0], dAtA[iNdEx:postIndex]...)
+			m.Raw = dAtA[iNdEx:postIndex]
 			if m.Raw == nil {
 				m.Raw = []byte{}
 			}
