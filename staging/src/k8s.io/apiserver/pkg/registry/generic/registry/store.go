@@ -1199,6 +1199,10 @@ func (e *Store) finalizeDelete(ctx context.Context, obj runtime.Object, runHooks
 	return status, nil
 }
 
+func (e *Store) Count(ctx context.Context) (int64, int64, error) {
+	return e.Storage.Count(e.KeyRootFunc(ctx))
+}
+
 // Watch makes a matcher for the given label and field, and calls
 // WatchPredicate. If possible, you should customize PredicateFunc to produce
 // a matcher that matches by key. SelectionPredicate does this for you
@@ -1435,7 +1439,7 @@ func (e *Store) startObservingCount(period time.Duration) func() {
 	klog.V(2).InfoS("Monitoring resource count at path", "resource", resourceName, "path", "<storage-prefix>/"+prefix)
 	stopCh := make(chan struct{})
 	go wait.JitterUntil(func() {
-		count, err := e.Storage.Count(prefix)
+		count, _, err := e.Storage.Count(prefix)
 		if err != nil {
 			klog.V(5).InfoS("Failed to update storage count metric", "err", err)
 			metrics.UpdateObjectCount(resourceName, -1)
