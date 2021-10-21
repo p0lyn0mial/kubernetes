@@ -512,13 +512,33 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 		return newErrWatcher(err), nil
 	}
 
-	// With some events already sent, update resourceVersion so that
-	// events that were buffered and not yet processed won't be delivered
-	// to this watcher second time causing going back in time.
-	if len(initEvents) > 0 {
-		watchRV = initEvents[len(initEvents)-1].ResourceVersion
-	}
 
+		// TODO: make it opt-in
+		if opts.Predicate.ConsistentWatchCache {
+			bookmarkEvent := &watchCacheEvent{
+				Type:            watch.Bookmark,
+				Object:          c.newFunc(),
+				ResourceVersion: watchRV, // points to c.watchCache.resourceVersion
+			}
+			if err := c.versioner.UpdateObject(bookmarkEvent.Object, bookmarkEvent.ResourceVersion); err != nil {
+				return newErrWatcher(fmt.Errorf("failed to set resourceVersion to %d on the bookmark event %+v", bookmarkEvent.ResourceVersion, bookmarkEvent.Object)), nil
+			}
+			initEvents = append(initEvents, bookmarkEvent)
+		}
+	} else if opts.Predicate.ConsistentWatchCache {
+		// TODO: make it opt-in
+		// if the request was from the reflector
+		// and there is no data just return bookmark
+		// so that the reflector can make progress
+		bookmarkEvent := &watchCacheEvent{
+			Type:            watch.Bookmark,
+			Object:          c.newFunc(),
+			ResourceVersion: c.watchCache.resourceVersion, // points to c.watchCache.resourceVersion
+		}
+		if err := c.versioner.UpdateObject(bookmarkEvent.Object, bookmarkEvent.ResourceVersion); err != nil {
+			return newErrWatcher(fmt.Errorf("failed to set resourceVersion to %d on the bookmark event %+v", bookmarkEvent.ResourceVersion, bookmarkEvent.Object)), nil
+		}
+		initEvents = append(initEvents, bookmarkEvent)
 	func() {
 		c.Lock()
 		defer c.Unlock()
