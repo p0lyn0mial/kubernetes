@@ -495,7 +495,7 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 	// given that memory allocation may trigger GC and block the thread.
 	// Also note that emptyFunc is a placeholder, until we will be able
 	// to compute watcher.forget function (which has to happen under lock).
-	watcher := newCacheWatcher(chanSize, filterWithAttrsFunction(key, pred), emptyFunc, c.versioner, deadline, pred.AllowWatchBookmarks, c.objectType, identifier)
+	watcher := newCacheWatcher(chanSize, filterWithAttrsFunction(key, pred), emptyFunc, c.versioner, deadline, pred.AllowWatchBookmarks, c.objectType, identifier, 0)
 
 	// We explicitly use thread unsafe version and do locking ourself to ensure that
 	// no new events will be processed in the meantime. The watchCache will be unlocked
@@ -1220,21 +1220,27 @@ type cacheWatcher struct {
 	// human readable identifier that helps assigning cacheWatcher
 	// instance with request
 	identifier string
+
+	// bookmarkAfterResourceVersion once set allows for sending bookmark events that are >= bookmarkAfterResourceVersion
+	// all bookmark events < bookmarkAfterResourceVersion will be dropped
+	// useful when a client wants to know if the watch cache has observed the desired RV
+	bookmarkAfterResourceVersion uint64
 }
 
-func newCacheWatcher(chanSize int, filter filterWithAttrsFunc, forget func(), versioner storage.Versioner, deadline time.Time, allowWatchBookmarks bool, objectType reflect.Type, identifier string) *cacheWatcher {
+func newCacheWatcher(chanSize int, filter filterWithAttrsFunc, forget func(), versioner storage.Versioner, deadline time.Time, allowWatchBookmarks bool, objectType reflect.Type, identifier string, bookmarkAfterResourceVersion uint64) *cacheWatcher {
 	return &cacheWatcher{
-		input:               make(chan *watchCacheEvent, chanSize),
-		result:              make(chan watch.Event, chanSize),
-		done:                make(chan struct{}),
-		filter:              filter,
-		stopped:             false,
-		forget:              forget,
-		versioner:           versioner,
-		deadline:            deadline,
-		allowWatchBookmarks: allowWatchBookmarks,
-		objectType:          objectType,
-		identifier:          identifier,
+		input:                        make(chan *watchCacheEvent, chanSize),
+		result:                       make(chan watch.Event, chanSize),
+		done:                         make(chan struct{}),
+		filter:                       filter,
+		stopped:                      false,
+		forget:                       forget,
+		versioner:                    versioner,
+		deadline:                     deadline,
+		allowWatchBookmarks:          allowWatchBookmarks,
+		objectType:                   objectType,
+		identifier:                   identifier,
+		bookmarkAfterResourceVersion: bookmarkAfterResourceVersion,
 	}
 }
 
@@ -1302,6 +1308,11 @@ func (c *cacheWatcher) nextBookmarkTime(now time.Time, bookmarkFrequency time.Du
 	// (a) roughly every minute
 	// (b) right before the watcher timeout - for now we simply set it 2s before
 	//     the deadline
+	// (c) immediately when c.bookmarkAfterResourceVersion > 0
+	//     TODO: in the future we could switch to (a) once the cacheWatcher has observed
+	//     rv >= c.bookmarkAfterResourceVersion
+	//     ATM a watch with c.bookmarkAfterResourceVersion set always quits after receiving the first bookmark event
+	//
 	// The former gives us periodicity if the watch breaks due to unexpected
 	// conditions, the later ensures that on timeout the watcher is as close to
 	// now as possible - this covers 99% of cases.
@@ -1310,6 +1321,9 @@ func (c *cacheWatcher) nextBookmarkTime(now time.Time, bookmarkFrequency time.Du
 		// Timeout is set by our client libraries (e.g. reflector) as well as defaulted by
 		// apiserver if properly configured. So this shoudln't happen in practice.
 		return heartbeatTime, true
+	}
+	if c.bookmarkAfterResourceVersion > 0 {
+		return now.Add(1 * time.Second), true
 	}
 	if pretimeoutTime := c.deadline.Add(-2 * time.Second); pretimeoutTime.Before(heartbeatTime) {
 		heartbeatTime = pretimeoutTime
@@ -1447,6 +1461,9 @@ func (c *cacheWatcher) process(ctx context.Context, initEvents []*watchCacheEven
 		case event, ok := <-c.input:
 			if !ok {
 				return
+			}
+			if c.bookmarkAfterResourceVersion > 0 && event.Type == watch.Bookmark && event.ResourceVersion < c.bookmarkAfterResourceVersion {
+				continue
 			}
 			// only send events newer than resourceVersion
 			if event.ResourceVersion > resourceVersion {
