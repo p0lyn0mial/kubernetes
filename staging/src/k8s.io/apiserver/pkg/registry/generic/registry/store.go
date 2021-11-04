@@ -1218,6 +1218,7 @@ func (e *Store) Watch(ctx context.Context, options *metainternalversion.ListOpti
 	if options != nil {
 		resourceVersion = options.ResourceVersion
 		predicate.AllowWatchBookmarks = options.AllowWatchBookmarks
+		predicate.ConsistentWatchCache = options.ConsistentWatchCache
 	}
 	return e.WatchPredicate(ctx, predicate, resourceVersion)
 }
