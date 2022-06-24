@@ -323,7 +323,9 @@ func (r *Reflector) ListAndWatch(stopCh <-chan struct{}) error {
 			return err
 		}
 
-		if err := watchHandler(start, w, r.store, r.expectedType, r.expectedGVK, r.name, r.expectedTypeName, r.setLastSyncResourceVersion, r.clock, resyncerrc, stopCh); err != nil {
+		err = watchHandler(start, w, r.store, r.expectedType, r.expectedGVK, r.name, r.expectedTypeName, r.setLastSyncResourceVersion, r.clock, false, resyncerrc, stopCh)
+		w.Stop()
+		if err != nil {
 			if err != errorStopRequested {
 				switch {
 				case isExpiredError(err):
@@ -471,14 +473,11 @@ func watchHandler(start time.Time,
 	expectedTypeName string,
 	setLastSyncResourceVersion func(string),
 	clock clock.Clock,
+	stopAfterBookmark bool,
 	errc chan error,
 	stopCh <-chan struct{},
 ) error {
 	eventCount := 0
-
-	// Stopping the watcher should be idempotent and if we return from this function there's no way
-	// we're coming back in with the same watch interface.
-	defer w.Stop()
 
 loop:
 	for {
@@ -541,6 +540,10 @@ loop:
 				rvu.UpdateResourceVersion(resourceVersion)
 			}
 			eventCount++
+			if stopAfterBookmark && event.Type == watch.Bookmark {
+				klog.V(4).Info("stopping the Watch since it was requested after receiving a bookmark event")
+				break loop
+			}
 		}
 	}
 
