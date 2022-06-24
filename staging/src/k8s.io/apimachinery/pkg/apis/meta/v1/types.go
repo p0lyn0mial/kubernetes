@@ -418,6 +418,12 @@ const (
 	// ResourceVersionMatchExact matches data at the exact resourceVersion
 	// provided.
 	ResourceVersionMatchExact ResourceVersionMatch = "Exact"
+	// ResourceVersionMatchMostRecent matches data at the most recent ResourceVersion.
+	// The returned data is consistent, that is, served from etcd via a quorum read.
+	// For watch calls, it begins with synthetic "Added" events of all resources up to the most recent ResourceVersion.
+	// It ends with a synthetic "Bookmark" event containing the most recent ResourceVersion.
+	// For list calls, it has the same semantics as leaving ResourceVersion and ResourceVersionMatch unset.
+	ResourceVersionMatchMostRecent ResourceVersionMatch = "MostRecent"
 )
 
 // +k8s:conversion-gen:explicit-from=net/url.Values
