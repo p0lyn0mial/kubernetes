@@ -58,13 +58,14 @@ func TestCacheWatcherCleanupNotBlockedByResult(t *testing.T) {
 	var w *cacheWatcher
 	count := 0
 	filter := func(string, labels.Set, fields.Set) bool { return true }
-	forget := func() {
+	forget := func(drainWatcher bool) {
 		lock.Lock()
 		defer lock.Unlock()
 		count++
 		// forget() has to stop the watcher, as only stopping the watcher
 		// triggers stopping the process() goroutine which we are in the
 		// end waiting for in this test.
+		w.setDrainInputBuffer(drainWatcher)
 		w.stopLocked()
 	}
 	initEvents := []*watchCacheEvent{
@@ -74,6 +75,7 @@ func TestCacheWatcherCleanupNotBlockedByResult(t *testing.T) {
 	// set the size of the buffer of w.result to 0, so that the writes to
 	// w.result is blocked.
 	w = newCacheWatcher(0, filter, forget, testVersioner{}, time.Now(), false, objectType, "")
+	w.setBookmarkAfterResourceVersion(0)
 	go w.processInterval(context.Background(), intervalFromEvents(initEvents), 0)
 	w.Stop()
 	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
@@ -89,7 +91,7 @@ func TestCacheWatcherHandlesFiltering(t *testing.T) {
 	filter := func(_ string, _ labels.Set, field fields.Set) bool {
 		return field["spec.nodeName"] == "host"
 	}
-	forget := func() {}
+	forget := func(bool) {}
 
 	testCases := []struct {
 		events   []*watchCacheEvent
@@ -194,6 +196,7 @@ TestCase:
 		}
 
 		w := newCacheWatcher(0, filter, forget, testVersioner{}, time.Now(), false, objectType, "")
+		w.setBookmarkAfterResourceVersion(0)
 		go w.processInterval(context.Background(), intervalFromEvents(testCase.events), 0)
 
 		ch := w.ResultChan()
@@ -210,6 +213,7 @@ TestCase:
 			break TestCase
 		default:
 		}
+		w.setDrainInputBuffer(false)
 		w.stopLocked()
 	}
 }
@@ -524,7 +528,8 @@ func TestCacheWatcherStoppedInAnotherGoroutine(t *testing.T) {
 	var w *cacheWatcher
 	done := make(chan struct{})
 	filter := func(string, labels.Set, fields.Set) bool { return true }
-	forget := func() {
+	forget := func(drainWatcher bool) {
+		w.setDrainInputBuffer(drainWatcher)
 		w.stopLocked()
 		done <- struct{}{}
 	}
@@ -535,6 +540,7 @@ func TestCacheWatcherStoppedInAnotherGoroutine(t *testing.T) {
 	// May sure that the watch will not be blocked on Stop.
 	for i := 0; i < maxRetriesToProduceTheRaceCondition; i++ {
 		w = newCacheWatcher(0, filter, forget, testVersioner{}, time.Now(), false, objectType, "")
+		w.setBookmarkAfterResourceVersion(0)
 		go w.Stop()
 		select {
 		case <-done:
@@ -547,6 +553,7 @@ func TestCacheWatcherStoppedInAnotherGoroutine(t *testing.T) {
 	// After that, verifies the cacheWatcher.process goroutine works correctly.
 	for i := 0; i < maxRetriesToProduceTheRaceCondition; i++ {
 		w = newCacheWatcher(2, filter, emptyFunc, testVersioner{}, deadline, false, objectType, "")
+		w.setBookmarkAfterResourceVersion(0)
 		w.input <- &watchCacheEvent{Object: &v1.Pod{}, ResourceVersion: uint64(i + 1)}
 		ctx, cancel := context.WithDeadline(context.Background(), deadline)
 		defer cancel()
@@ -556,6 +563,7 @@ func TestCacheWatcherStoppedInAnotherGoroutine(t *testing.T) {
 		case <-time.After(time.Second):
 			t.Fatal("expected received a event on ResultChan")
 		}
+		w.setDrainInputBuffer(false)
 		w.stopLocked()
 	}
 }
@@ -667,10 +675,12 @@ func TestTimeBucketWatchersBasic(t *testing.T) {
 	filter := func(_ string, _ labels.Set, _ fields.Set) bool {
 		return true
 	}
-	forget := func() {}
+	forget := func(bool) {}
 
 	newWatcher := func(deadline time.Time) *cacheWatcher {
-		return newCacheWatcher(0, filter, forget, testVersioner{}, deadline, true, objectType, "")
+		w := newCacheWatcher(0, filter, forget, testVersioner{}, deadline, true, objectType, "")
+		w.setBookmarkAfterResourceVersion(0)
+		return w
 	}
 
 	clock := testingclock.NewFakeClock(time.Now())
@@ -1579,5 +1589,241 @@ func TestCacheIntervalInvalidationStopsWatch(t *testing.T) {
 	// we should have processed exactly bufferSize number of elements.
 	if received != bufferSize {
 		t.Errorf("unexpected number of events received, expected: %d, got: %d", bufferSize+1, received)
+	}
+}
+
+func TestBookmarkAfterResourceVersionWatchers(t *testing.T) {
+	newWatcher := func(id string, deadline time.Time) *cacheWatcher {
+		w := newCacheWatcher(0, func(_ string, _ labels.Set, _ fields.Set) bool { return true }, func(bool) {}, testVersioner{}, deadline, true, objectType, id)
+		w.setBookmarkAfterResourceVersion(10)
+		return w
+	}
+
+	clock := testingclock.NewFakeClock(time.Now())
+	target := newTimeBucketWatchers(clock, defaultBookmarkFrequency)
+	if !target.addWatcher(newWatcher("1", clock.Now().Add(2*time.Minute))) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// the watcher is immediately expired
+	ret := target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// after one second time the watcher is still expired
+	clock.Step(1 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// after 29 seconds the watcher is still expired
+	clock.Step(29 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+
+	// after confirming the watcher is not expired immediately
+	ret[0][0].markBookmarkAfterResourceVersionAsReceived(&watchCacheEvent{Type: watch.Bookmark, ResourceVersion: 10, Object: &v1.Pod{}})
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	clock.Step(30 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 0 {
+		t.Fatalf("didn't expect any watchers to be expired")
+	}
+
+	clock.Step(30 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+}
+
+// TestCacheWatcherDraining verifies the cacheWatcher.process goroutine is properly cleaned up when draining was requested
+func TestCacheWatcherDraining(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBuffer(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(1, filter, forget, testVersioner{}, time.Now(), true, objectType, "")
+	w.setBookmarkAfterResourceVersion(0)
+	go w.processInterval(context.Background(), intervalFromEvents(initEvents), 0)
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{}}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	forget(true) // drain the watcher
+	<-w.ResultChan()
+	<-w.ResultChan()
+	<-w.ResultChan()
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 2, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called twice, because processInterval should call Stop(): %v", err)
+	}
+}
+
+// TestCacheWatcherDrainingRequestedButNotDrained verifies the cacheWatcher.process goroutine is properly cleaned up when draining was requested
+// but the client never actually get any data
+func TestCacheWatcherDrainingRequestedButNotDrained(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBuffer(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(1, filter, forget, testVersioner{}, time.Now(), true, objectType, "")
+	w.setBookmarkAfterResourceVersion(0)
+	go w.processInterval(context.Background(), intervalFromEvents(initEvents), 0)
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{}}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	forget(true) // drain the watcher
+	w.Stop()     // client disconnected, timeout expired or ctx was actually closed
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 3, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called three times, because processInterval should call Stop(): %v", err)
+	}
+}
+
+// TestCacheWatcherDrainingNoBookmarkAfterResourceVersionReceived verifies if the watcher will be stopped
+// when adding an item timeout and the bookmarkAfterResourceVersion hasn't been received
+func TestCacheWatcherDrainingNoBookmarkAfterResourceVersionReceived(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBuffer(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(0, filter, forget, testVersioner{}, time.Now(), true, objectType, "")
+	w.setBookmarkAfterResourceVersion(10)
+	go w.processInterval(context.Background(), intervalFromEvents(initEvents), 0)
+	if w.add(&watchCacheEvent{Object: &v1.Pod{}}, time.NewTimer(1*time.Second)) {
+		t.Fatal("expected the add method to fail")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 1, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called once, because processInterval should call Stop(): %v", err)
+	}
+
+	if !w.stopped {
+		t.Fatal("expected the watcher to be stopped but it wasn't")
+	}
+}
+
+// TestCacheWatcherDrainingNoBookmarkAfterResourceVersionSent checks if the watcher's input chan is drained if the bookmarkAfterResourceVersion was received but not sent
+func TestCacheWatcherDrainingNoBookmarkAfterResourceVersionSent(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	watchInitializationSignal := utilflowcontrol.NewInitializationSignal()
+	ctx := utilflowcontrol.WithInitializationSignal(context.Background(), watchInitializationSignal)
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBuffer(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(2, filter, forget, testVersioner{}, time.Now(), true, objectType, "")
+	w.setBookmarkAfterResourceVersion(10)
+	go w.processInterval(ctx, intervalFromEvents(initEvents), 0)
+	watchInitializationSignal.Wait()
+
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p1"}}, ResourceVersion: 5}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if !w.nonblockingAdd(&watchCacheEvent{Type: watch.Bookmark, ResourceVersion: 10, Object: &v1.Pod{}}) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p2"}}, ResourceVersion: 15}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p3"}}, ResourceVersion: 20}, time.NewTimer(1*time.Second)) {
+		t.Fatal("expected the add method to fail")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 1, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called once, because processInterval should call Stop(): %v", err)
+	}
+
+	if !w.stopped {
+		t.Fatal("expected the watcher to be stopped but it wasn't")
+	}
+	<-w.ResultChan()      // init
+	<-w.ResultChan()      // init
+	<-w.ResultChan()      // w.add p1
+	e := <-w.ResultChan() // w.add bookmark
+	if e.Type != watch.Bookmark {
+		t.Fatalf("expected to get a bookmark event but got %v", e)
+	}
+	_, ok := <-w.ResultChan() // w.add p2
+	if !ok {
+		t.Fatal("didn't expect to see the result chan to be closed")
+	}
+	_, ok = <-w.ResultChan()
+	if ok {
+		t.Fatal("expected to see the result chan to be closed")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 2, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called two times, because processInterval should call Stop(): %v", err)
 	}
 }
