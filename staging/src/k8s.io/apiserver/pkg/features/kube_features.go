@@ -176,6 +176,12 @@ const (
 	//
 	// Enables support for watch bookmark events.
 	WatchBookmark featuregate.Feature = "WatchBookmark"
+
+	// owner: @p0lyn0mial
+	// alpha: v1.25
+	//
+	// Allow the API server to stream individual items instead of chunking
+	WatchList featuregate.Feature = "WatchList"
 )
 
 func init() {
@@ -221,4 +227,6 @@ var defaultKubernetesFeatureGates = map[featuregate.Feature]featuregate.FeatureS
 	StorageVersionHash: {Default: true, PreRelease: featuregate.Beta},
 
 	WatchBookmark: {Default: true, PreRelease: featuregate.GA, LockToDefault: true},
+
+	WatchList: {Default: false, PreRelease: featuregate.Alpha},
 }
