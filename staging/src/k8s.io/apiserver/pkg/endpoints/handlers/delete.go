@@ -203,7 +203,7 @@ func DeleteCollection(r rest.CollectionDeleter, checkBody bool, scope *RequestSc
 			return
 		}
 
-		if errs := metainternalversionvalidation.ValidateListOptions(&listOptions); len(errs) > 0 {
+		if errs := metainternalversionvalidation.ValidateListOptions(&listOptions, utilfeature.DefaultFeatureGate.Enabled(features.WatchList)); len(errs) > 0 {
 			err := errors.NewInvalid(schema.GroupKind{Group: metav1.GroupName, Kind: "ListOptions"}, "", errs)
 			scope.err(err, w, req)
 			return

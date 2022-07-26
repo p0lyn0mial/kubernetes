@@ -17,16 +17,18 @@ limitations under the License.
 package validation
 
 import (
+	"testing"
+
 	"k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
 )
 
 func TestValidateListOptions(t *testing.T) {
 	cases := []struct {
-		name        string
-		opts        internalversion.ListOptions
-		expectError string
+		name                    string
+		opts                    internalversion.ListOptions
+		watchListFeatureEnabled bool
+		expectError             string
 	}{
 		{
 			name: "valid-default",
@@ -62,11 +64,46 @@ func TestValidateListOptions(t *testing.T) {
 			},
 			expectError: "resourceVersionMatch: Unsupported value: \"foo\": supported values: \"Exact\", \"NotOlderThan\", \"\"",
 		},
+		{
+			name: "watch-resourceversionmatch-forbidden",
+			opts: internalversion.ListOptions{
+				Watch:                true,
+				ResourceVersionMatch: "foo",
+			},
+			expectError: "resourceVersionMatch: Forbidden: resourceVersionMatch is forbidden for watch",
+		},
+		{
+			name: "watch-sendInitialEvents-forbidden",
+			opts: internalversion.ListOptions{
+				Watch:               true,
+				SendInitialEvents:   true,
+				AllowWatchBookmarks: true,
+			},
+			expectError: "sendInitialEvents: Forbidden: sendInitialEvents is forbidden for watch",
+		},
+		{
+			name: "watch-sendInitialEvents-forbidden-without-bookmarks",
+			opts: internalversion.ListOptions{
+				Watch:             true,
+				SendInitialEvents: true,
+			},
+			watchListFeatureEnabled: true,
+			expectError:             `sendInitialEvents: Forbidden: sendInitialEvents is forbidden when allowWatchBookmarks is disabled`,
+		},
+		{
+			name: "watch-sendInitialEvents",
+			opts: internalversion.ListOptions{
+				Watch:               true,
+				SendInitialEvents:   true,
+				AllowWatchBookmarks: true,
+			},
+			watchListFeatureEnabled: true,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			errs := ValidateListOptions(&tc.opts)
+			errs := ValidateListOptions(&tc.opts, tc.watchListFeatureEnabled)
 			if tc.expectError != "" {
 				if len(errs) != 1 {
 					t.Errorf("expected an error but got %d errors", len(errs))
