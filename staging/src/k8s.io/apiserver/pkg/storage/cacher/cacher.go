@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/audit"
@@ -486,6 +487,13 @@ func (c *Cacher) Delete(
 
 // Watch implements storage.Interface.
 func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
+	if opts.SendInitialEvents != nil {
+		return nil, errors.NewInvalid(
+			schema.GroupKind{Group: c.groupResource.Group, Kind: c.groupResource.Resource},
+			"",
+			field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is not yet implemented by the watch cache")},
+		)
+	}
 	pred := opts.Predicate
 	watchRV, err := c.versioner.ParseResourceVersion(opts.ResourceVersion)
 	if err != nil {
