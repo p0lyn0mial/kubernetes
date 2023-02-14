@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	v1 "k8s.io/api/core/v1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -243,6 +245,9 @@ func (testVersioner) ObjectResourceVersion(obj runtime.Object) (uint64, error) {
 	return strconv.ParseUint(version, 10, 64)
 }
 func (testVersioner) ParseResourceVersion(resourceVersion string) (uint64, error) {
+	if len(resourceVersion) == 0 {
+		return 0, nil
+	}
 	return strconv.ParseUint(resourceVersion, 10, 64)
 }
 
@@ -276,8 +281,10 @@ func newTestCacher(s storage.Interface) (*Cacher, storage.Versioner, error) {
 	return cacher, testVersioner{}, err
 }
 
+// TODO: rename to stub
 type dummyStorage struct {
-	err error
+	err       error
+	getListFn func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error
 }
 
 type dummyWatch struct {
@@ -311,7 +318,10 @@ func (d *dummyStorage) Watch(_ context.Context, _ string, _ storage.ListOptions)
 func (d *dummyStorage) Get(_ context.Context, _ string, _ storage.GetOptions, _ runtime.Object) error {
 	return d.err
 }
-func (d *dummyStorage) GetList(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error {
+func (d *dummyStorage) GetList(ctx context.Context, resPrefix string, opts storage.ListOptions, listObj runtime.Object) error {
+	if d.getListFn != nil {
+		return d.getListFn(ctx, resPrefix, opts, listObj)
+	}
 	podList := listObj.(*example.PodList)
 	podList.ListMeta = metav1.ListMeta{ResourceVersion: "100"}
 	return d.err
@@ -672,7 +682,9 @@ func TestTimeBucketWatchersBasic(t *testing.T) {
 	forget := func(bool) {}
 
 	newWatcher := func(deadline time.Time) *cacheWatcher {
-		return newCacheWatcher(0, filter, forget, testVersioner{}, deadline, true, schema.GroupResource{Resource: "pods"}, "")
+		w := newCacheWatcher(0, filter, forget, testVersioner{}, deadline, true, schema.GroupResource{Resource: "pods"}, "")
+		w.setBookmarkAfterResourceVersion(0)
+		return w
 	}
 
 	clock := testingclock.NewFakeClock(time.Now())
@@ -1322,6 +1334,15 @@ func verifyEvents(t *testing.T, w watch.Interface, events []watch.Event) {
 	}
 }
 
+func verifyNoEvents(t *testing.T, w watch.Interface) {
+	select {
+	case e := <-w.ResultChan():
+		t.Errorf("Unexpected: %#v event received, expected no events", e)
+	default:
+		return
+	}
+}
+
 func TestCachingDeleteEvents(t *testing.T) {
 	backingStorage := &dummyStorage{}
 	cacher, _, err := newTestCacher(backingStorage)
@@ -1668,5 +1689,517 @@ func TestCacheWatcherDrainingRequestedButNotDrained(t *testing.T) {
 		return count == 3, nil
 	}); err != nil {
 		t.Fatalf("expected forget() to be called three times, because processInterval should call Stop(): %v", err)
+	}
+}
+
+// TestCacheWatcherDrainingNoBookmarkAfterResourceVersionReceived verifies if the watcher will be stopped
+// when adding an item timeout and the bookmarkAfterResourceVersion hasn't been received
+func TestCacheWatcherDrainingNoBookmarkAfterResourceVersionReceived(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBufferLocked(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(0, filter, forget, testVersioner{}, time.Now(), true, schema.GroupResource{Resource: "pods"}, "")
+	w.setBookmarkAfterResourceVersion(10)
+	go w.processInterval(context.Background(), intervalFromEvents(initEvents), 0)
+	if w.add(&watchCacheEvent{Object: &v1.Pod{}}, time.NewTimer(1*time.Second)) {
+		t.Fatal("expected the add method to fail")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 1, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called once, because processInterval should call Stop(): %v", err)
+	}
+
+	if !w.stopped {
+		t.Fatal("expected the watcher to be stopped but it wasn't")
+	}
+}
+
+// TestCacheWatcherDrainingNoBookmarkAfterResourceVersionSent checks if the watcher's input chan is drained if the bookmarkAfterResourceVersion was received but not sent
+func TestCacheWatcherDrainingNoBookmarkAfterResourceVersionSent(t *testing.T) {
+	var lock sync.RWMutex
+	var w *cacheWatcher
+	watchInitializationSignal := utilflowcontrol.NewInitializationSignal()
+	ctx := utilflowcontrol.WithInitializationSignal(context.Background(), watchInitializationSignal)
+	count := 0
+	filter := func(string, labels.Set, fields.Set) bool { return true }
+	forget := func(drainWatcher bool) {
+		lock.Lock()
+		defer lock.Unlock()
+		count++
+		w.setDrainInputBufferLocked(drainWatcher)
+		w.stopLocked()
+	}
+	initEvents := []*watchCacheEvent{
+		{Object: &v1.Pod{}},
+		{Object: &v1.Pod{}},
+	}
+	w = newCacheWatcher(2, filter, forget, testVersioner{}, time.Now(), true, schema.GroupResource{Resource: "pods"}, "")
+	w.setBookmarkAfterResourceVersion(10)
+	go w.processInterval(ctx, intervalFromEvents(initEvents), 0)
+	watchInitializationSignal.Wait()
+
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p1"}}, ResourceVersion: 5}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if !w.nonblockingAdd(&watchCacheEvent{Type: watch.Bookmark, ResourceVersion: 10, Object: &v1.Pod{}}) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if !w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p2"}}, ResourceVersion: 15}, time.NewTimer(1*time.Second)) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	if w.add(&watchCacheEvent{Object: &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p3"}}, ResourceVersion: 20}, time.NewTimer(1*time.Second)) {
+		t.Fatal("expected the add method to fail")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 1, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called once, because processInterval should call Stop(): %v", err)
+	}
+
+	if !w.stopped {
+		t.Fatal("expected the watcher to be stopped but it wasn't")
+	}
+	<-w.ResultChan()      // init
+	<-w.ResultChan()      // init
+	<-w.ResultChan()      // w.add p1
+	e := <-w.ResultChan() // w.add bookmark
+	if e.Type != watch.Bookmark {
+		t.Fatalf("expected to get a bookmark event but got %v", e)
+	}
+	bookmarkObjMeta, err := meta.Accessor(e.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := bookmarkObjMeta.GetAnnotations()["k8s.io/initial-events-end"]; !ok {
+		t.Fatalf("didn't find required %q annotation on the received bookmark object", "k8s.io/initial-events-end")
+	} else if v != "true" {
+		t.Fatalf("incorrect value %q in %q annotation  on the received bookmark obj, expected %q", v, "k8s.io/initial-events-end", "true")
+	}
+
+	_, ok := <-w.ResultChan() // w.add p2
+	if !ok {
+		t.Fatal("didn't expect to see the result chan to be closed")
+	}
+	_, ok = <-w.ResultChan()
+	if ok {
+		t.Fatal("expected to see the result chan to be closed")
+	}
+	if err := wait.PollImmediate(1*time.Second, 5*time.Second, func() (bool, error) {
+		lock.RLock()
+		defer lock.RUnlock()
+		return count == 2, nil
+	}); err != nil {
+		t.Fatalf("expected forget() to be called two times, because processInterval should call Stop(): %v", err)
+	}
+}
+
+func TestBookmarkAfterResourceVersionWatchers(t *testing.T) {
+	newWatcher := func(id string, deadline time.Time) *cacheWatcher {
+		w := newCacheWatcher(0, func(_ string, _ labels.Set, _ fields.Set) bool { return true }, func(bool) {}, testVersioner{}, deadline, true, schema.GroupResource{Resource: "pods"}, id)
+		w.setBookmarkAfterResourceVersion(10)
+		return w
+	}
+
+	clock := testingclock.NewFakeClock(time.Now())
+	target := newTimeBucketWatchers(clock, defaultBookmarkFrequency)
+	if !target.addWatcher(newWatcher("1", clock.Now().Add(2*time.Minute))) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// the watcher is immediately expired
+	ret := target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// after one second time the watcher is still expired
+	clock.Step(1 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+
+	// after 29 seconds the watcher is still expired
+	clock.Step(29 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+
+	// after confirming the watcher is not expired immediately
+	ret[0][0].markBookmarkAfterResourceVersionAsReceived(&watchCacheEvent{Type: watch.Bookmark, ResourceVersion: 10, Object: &v1.Pod{}})
+	if !target.addWatcher(ret[0][0]) {
+		t.Fatal("failed adding an even to the watcher")
+	}
+	clock.Step(30 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 0 {
+		t.Fatalf("didn't expect any watchers to be expired")
+	}
+
+	clock.Step(30 * time.Second)
+	ret = target.popExpiredWatchers()
+	if len(ret) != 1 || len(ret[0]) != 1 {
+		t.Fatalf("expected only one watcher to be expired")
+	}
+}
+
+func TestCacheWatchSemantics(t *testing.T) {
+	makePod := func(rv uint64) *example.Pod {
+		return &example.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            fmt.Sprintf("pod-%d", rv),
+				Namespace:       "ns",
+				ResourceVersion: fmt.Sprintf("%d", rv),
+				Annotations:     map[string]string{},
+			},
+		}
+	}
+
+	scenarios := []struct {
+		name string
+		run  func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string))
+	}{
+		{
+			name: "allowWatchBookmarks=true, sendInitialEvents=true, RV=unset",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// before starting a new watch set a storage RV to some future value
+				setStorageListMetaRV("102")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = true; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get initial events
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(101)}})
+				verifyNoEvents(t, w)
+				// add a pod that matches the storage's future RV
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				verifyEvents(t, w,
+					[]watch.Event{
+						{Type: watch.Added, Object: makePod(102)},
+						{Type: watch.Bookmark, Object: &example.Pod{
+							ObjectMeta: metav1.ObjectMeta{
+								ResourceVersion: "102",
+								Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+							},
+						}},
+					},
+				)
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "allowWatchBookmarks=true, sendInitialEvents=true, RV=0",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "0", Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = true; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get events up to an RV=102 and the bookmark
+				verifyEvents(t, w,
+					[]watch.Event{
+						{Type: watch.Added, Object: makePod(101)},
+						{Type: watch.Added, Object: makePod(102)},
+						{Type: watch.Bookmark, Object: &example.Pod{
+							ObjectMeta: metav1.ObjectMeta{
+								ResourceVersion: "102",
+								Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+							},
+						}},
+					})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "allowWatchBookmarks=true, sendInitialEvents=true, RV=101",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "101", Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = true; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get events form RV=101 and the bookmark
+				verifyEvents(t, w,
+					[]watch.Event{
+						{Type: watch.Added, Object: makePod(102)},
+						{Type: watch.Bookmark, Object: &example.Pod{
+							ObjectMeta: metav1.ObjectMeta{
+								ResourceVersion: "102",
+								Annotations:     map[string]string{"k8s.io/initial-events-end": "true"},
+							},
+						}},
+					})
+			},
+		},
+		{
+			name: "allowWatchBookmarks=false, sendInitialEvents=true, RV=unset",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// before starting a new watch set a storage RV to some future value
+				setStorageListMetaRV("102")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = false; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get initial events
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(101)}})
+				verifyNoEvents(t, w)
+				// add a pod that matches the storage's future RV
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(102)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "allowWatchBookmarks=false, sendInitialEvents=true, RV=0",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "0", Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = false; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get initial events
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(101)}, {Type: watch.Added, Object: makePod(102)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "allowWatchBookmarks=false, sendInitialEvents=true, RV=101",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "101", Predicate: func() storage.SelectionPredicate { p := storage.Everything; p.AllowWatchBookmarks = false; return p }(), SendInitialEvents: func() *bool { b := true; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we only get initial events that are > initial RV (101)
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(102)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "sendInitialEvents=false, RV=unset",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// before starting a new watch set a storage RV to some future value
+				setStorageListMetaRV("103")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{Predicate: storage.Everything, SendInitialEvents: func() *bool { b := false; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure we haven't got initial events
+				verifyNoEvents(t, w)
+				// add a pod that is greater than the storage's RV when the watch was started
+				err = cacher.watchCache.Add(makePod(104))
+				require.NoError(t, err, "failed to add a pod: %v")
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(104)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "sendInitialEvents=false, RV=0",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "0", Predicate: storage.Everything, SendInitialEvents: func() *bool { b := false; return &b }()})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				verifyNoEvents(t, w)
+				// add a pod that is greater than the storage's RV when the watch was started
+				err = cacher.watchCache.Add(makePod(103))
+				require.NoError(t, err, "failed to add a pod: %v")
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(103)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "legacy, RV=0",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{ResourceVersion: "0", Predicate: storage.Everything})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure get initial events
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(101)}, {Type: watch.Added, Object: makePod(102)}})
+				verifyNoEvents(t, w)
+			},
+		},
+		{
+			name: "legacy, RV=unset",
+			run: func(t *testing.T, cacher *Cacher, setStorageListMetaRV func(rv string)) {
+				// add some initial data
+				err := cacher.watchCache.Add(makePod(101))
+				require.NoError(t, err, "failed to add a pod: %v")
+				err = cacher.watchCache.Add(makePod(102))
+				require.NoError(t, err, "failed to add a pod: %v")
+				// set storage's RV to some future value, should not be used by this scenario
+				setStorageListMetaRV("105")
+				w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{Predicate: storage.Everything})
+				require.NoError(t, err, "failed to create watch: %v")
+				defer w.Stop()
+				// make sure get initial events
+				verifyEvents(t, w, []watch.Event{{Type: watch.Added, Object: makePod(101)}, {Type: watch.Added, Object: makePod(102)}})
+				verifyNoEvents(t, w)
+			},
+		},
+	}
+
+	for _, scenario := range scenarios {
+		t.Run(scenario.name, func(t *testing.T) {
+			storageListMetaResourceVersion := "100"
+			backingStorage := &dummyStorage{getListFn: func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error {
+				podList := listObj.(*example.PodList)
+				podList.ListMeta = metav1.ListMeta{ResourceVersion: storageListMetaResourceVersion}
+				return nil
+			}}
+
+			cacher, _, err := newTestCacher(backingStorage)
+			if err != nil {
+				t.Fatalf("falied to create cacher: %v", err)
+			}
+			defer cacher.Stop()
+			if err := cacher.ready.wait(); err != nil {
+				t.Fatalf("unexpected error waiting for the cache to be ready")
+			}
+			scenario.run(t, cacher, func(storageListMetaRV string) { storageListMetaResourceVersion = storageListMetaRV })
+		})
+	}
+}
+
+// sendInitialEvents=true, RV=""
+func TestCacheWatchSemanticsScenario1(t *testing.T) {
+	storageListMetaResourceVersion := "100"
+	backingStorage := &dummyStorage{getListFn: func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error {
+		podList := listObj.(*example.PodList)
+		podList.ListMeta = metav1.ListMeta{ResourceVersion: storageListMetaResourceVersion}
+		return nil
+	}}
+	cacher, _, err := newTestCacher(backingStorage)
+	if err != nil {
+		t.Fatalf("falied to create cacher: %v", err)
+	}
+	defer cacher.Stop()
+
+	// Wait until cacher is initialized.
+	if err := cacher.ready.wait(); err != nil {
+		t.Fatalf("unexpected error waiting for the cache to be ready")
+	}
+
+	//
+	makePod := func(rv int) *examplev1.Pod {
+		return &examplev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            fmt.Sprintf("pod-%d", rv),
+				Namespace:       "ns",
+				ResourceVersion: fmt.Sprintf("%v", rv),
+			},
+		}
+	}
+
+	// add some initial events
+	if err := cacher.watchCache.Add(makeTestPod("pod-101", 101)); err != nil {
+		t.Fatalf("failed to add a pod: %v", err)
+	}
+	//
+
+	// before starting a new watch set storage RV
+	storageListMetaResourceVersion = "102"
+	sendInitialEvents := true
+	watchPredicate := storage.Everything
+	watchPredicate.AllowWatchBookmarks = true
+	w, err := cacher.Watch(context.Background(), "pods/ns", storage.ListOptions{Predicate: watchPredicate, SendInitialEvents: &sendInitialEvents})
+	if err != nil {
+		t.Fatalf("Failed to create watch: %v", err)
+	}
+	defer w.Stop()
+
+	e := <-w.ResultChan()
+	if e.Type != watch.Added {
+		t.Fatalf("unexpected event.Type: %v, expected: %v", e.Type, watch.Added)
+	}
+	if e.Object.(*examplev1.Pod).ResourceVersion != "101" {
+		t.Fatalf("received a pod with unexpected RV: %v, expected RV: 101", e.Object.(*examplev1.Pod).ResourceVersion)
+	}
+	select {
+	case e := <-w.ResultChan():
+		t.Fatalf("unexpected event received: %#v", e)
+	default:
+		break
+	}
+
+	//
+	if err := cacher.watchCache.Add(makePod(102)); err != nil {
+		t.Fatalf("failed to add a pod: %v", err)
+	}
+
+	e = <-w.ResultChan()
+	e = <-w.ResultChan()
+	select {
+	case e := <-w.ResultChan():
+		t.Fatalf("unexpected event received: %#v", e)
+	default:
+		break
 	}
 }
