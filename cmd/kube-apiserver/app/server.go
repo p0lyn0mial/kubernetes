@@ -38,11 +38,8 @@ import (
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-<<<<<<< HEAD
 	corev1 "k8s.io/api/core/v1"
-=======
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
->>>>>>> v1.26.6
 	extensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
