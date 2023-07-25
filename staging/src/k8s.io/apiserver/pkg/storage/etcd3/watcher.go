@@ -19,6 +19,7 @@ package etcd3
 import (
 	"context"
 	"fmt"
+
 	"os"
 	"reflect"
 	"strconv"
@@ -29,23 +30,32 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/value"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
+	"k8s.io/klog/v2"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-
-	"k8s.io/klog/v2"
 )
 
 const (
 	// We have set a buffer in order to reduce times of context switches.
 	incomingBufSize = 100
 	outgoingBufSize = 100
+
+	// resourceVersionTooHighRetrySeconds is the seconds before
+	// an operation should be retried by the client
+	// after receiving a 'too high resource version' error.
+	resourceVersionTooHighRetrySeconds = 1
 )
 
 // fatalOnDecodeError is used during testing to panic the server if watcher encounters a decoding error
@@ -85,6 +95,22 @@ type watchChan struct {
 	incomingEventChan chan *event
 	resultChan        chan watch.Event
 	errChan           chan error
+	// initialEventsEndBookmarkSent helps us keep track
+	// of whether we have sent an annotated bookmark event.
+	//
+	// it's important to note that we don't
+	// need to track the actual RV because
+	// we only send the bookmark event
+	// after the initial list call.
+	//
+	// when this variable is set to false,
+	// it means we don't have any specific
+	// preferences for delivering bookmark events.
+	initialEventsEndBookmarkSent bool
+	// initialEventsEndBookmarkSentMutex protects initialEventsEndBookmarkSent
+	// this field needs to be protected because there are two
+	// goroutines accessing it.
+	initialEventsEndBookmarkSentMutex sync.RWMutex
 }
 
 func newWatcher(client *clientv3.Client, codec runtime.Codec, groupResource schema.GroupResource, newFunc func() runtime.Object, versioner storage.Versioner) *watcher {
@@ -114,7 +140,27 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, transformer 
 	if opts.Recursive && !strings.HasSuffix(key, "/") {
 		key += "/"
 	}
-	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, opts.ProgressNotify, transformer, opts.Predicate)
+	var initialEventsEndBookmarkRequired bool
+	progressNotify := opts.ProgressNotify
+	if utilfeature.DefaultFeatureGate.Enabled(features.WatchList) &&
+		opts.SendInitialEvents != nil &&
+		*opts.SendInitialEvents &&
+		opts.Predicate.AllowWatchBookmarks {
+		if w.newFunc == nil {
+			return nil, apierrors.NewInvalid(
+				schema.GroupKind{Group: w.groupResource.Group, Kind: w.groupResource.Resource},
+				"",
+				field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is unsupported by the etcd storage because no newFunc was provided")},
+			)
+		}
+		// since there is no way to directly set
+		// opts.ProgressNotify from the API
+		// we need to take into account the value
+		// stored at opts.Predicate.AllowWatchBookmarks
+		progressNotify = true
+		initialEventsEndBookmarkRequired = true
+	}
+	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, progressNotify, initialEventsEndBookmarkRequired, transformer, opts.Predicate)
 	go wc.run()
 
 	// For etcd watch we don't have an easy way to answer whether the watch
@@ -127,18 +173,19 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, transformer 
 	return wc, nil
 }
 
-func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify bool, transformer value.Transformer, pred storage.SelectionPredicate) *watchChan {
+func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify, initialEventsEndBookmarkRequired bool, transformer value.Transformer, pred storage.SelectionPredicate) *watchChan {
 	wc := &watchChan{
-		watcher:           w,
-		transformer:       transformer,
-		key:               key,
-		initialRev:        rev,
-		recursive:         recursive,
-		progressNotify:    progressNotify,
-		internalPred:      pred,
-		incomingEventChan: make(chan *event, incomingBufSize),
-		resultChan:        make(chan watch.Event, outgoingBufSize),
-		errChan:           make(chan error, 1),
+		watcher:                      w,
+		transformer:                  transformer,
+		key:                          key,
+		initialRev:                   rev,
+		recursive:                    recursive,
+		progressNotify:               progressNotify,
+		internalPred:                 pred,
+		incomingEventChan:            make(chan *event, incomingBufSize),
+		resultChan:                   make(chan watch.Event, outgoingBufSize),
+		errChan:                      make(chan error, 1),
+		initialEventsEndBookmarkSent: !initialEventsEndBookmarkRequired,
 	}
 	if pred.Empty() {
 		// The filter doesn't filter out any object.
@@ -254,12 +301,33 @@ func logWatchChannelErr(err error) {
 // - get current objects if initialRev=0; set initialRev to current rev
 // - watch on given key and send events to process.
 func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
-	if wc.initialRev == 0 {
+	// since we start watching the other goroutine cannot
+	// receive any bookmark events thus it's safe to read the value once
+	initialEventsEndBookmarkSent := wc.isInitialEventsEndBookmarkSent()
+	listObjects := wc.initialRev == 0
+	if wc.initialRev > 0 && !initialEventsEndBookmarkSent {
+		currentStorageRV, err := wc.getCurrentResourceVersionFromStorage()
+		if err != nil {
+			err = fmt.Errorf("failed to get the current resource version from the storage: %w", err)
+			wc.sendError(err)
+			return
+		}
+		if uint64(wc.initialRev) > currentStorageRV {
+			// TODO: add some jitter to resourceVersionTooHighRetrySeconds
+			wc.sendError(storage.NewTooLargeResourceVersionError(uint64(wc.initialRev), currentStorageRV, resourceVersionTooHighRetrySeconds))
+			return
+		}
+		listObjects = true
+	}
+	if listObjects {
 		if err := wc.sync(); err != nil {
 			klog.Errorf("failed to sync with latest state: %v", err)
 			wc.sendError(err)
 			return
 		}
+	}
+	if !initialEventsEndBookmarkSent {
+		wc.sendEvent(progressNotifyEvent(wc.initialRev))
 	}
 	opts := []clientv3.OpOption{clientv3.WithRev(wc.initialRev + 1), clientv3.WithPrevKV()}
 	if wc.recursive {
@@ -320,6 +388,7 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 			// The worst case would be closing the fast watcher.
 			select {
 			case wc.resultChan <- *res:
+				wc.setInitialEventsEndBookmarkSent(res)
 			case <-wc.ctx.Done():
 				return
 			}
@@ -357,8 +426,22 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 		}
 		object := wc.watcher.newFunc()
 		if err := wc.watcher.versioner.UpdateObject(object, uint64(e.rev)); err != nil {
-			klog.Errorf("failed to propagate object version: %v", err)
+			utilruntime.HandleError(fmt.Errorf("failed to propagate object version: %v", err))
 			return nil
+		}
+		if !wc.isInitialEventsEndBookmarkSent() {
+			objMeta, err := meta.Accessor(object)
+			if err != nil {
+				utilruntime.HandleError(fmt.Errorf("error while accessing object's metadata obj: %#v, err: %v", object, err))
+				return nil
+			}
+			objAnnotations := objMeta.GetAnnotations()
+			if objAnnotations == nil {
+				objAnnotations = map[string]string{}
+			}
+			// TODO: move to a const
+			objAnnotations["k8s.io/initial-events-end"] = "true"
+			objMeta.SetAnnotations(objAnnotations)
 		}
 		res = &watch.Event{
 			Type:   watch.Bookmark,
@@ -474,6 +557,51 @@ func (wc *watchChan) prepareObjs(e *event) (curObj runtime.Object, oldObj runtim
 		}
 	}
 	return curObj, oldObj, nil
+}
+
+// isInitialEventsEndBookmarkSent same as isInitialEventsEndBookmarkSentLocked
+// just acquires the lock.
+func (wc *watchChan) isInitialEventsEndBookmarkSent() bool {
+	wc.initialEventsEndBookmarkSentMutex.RLock()
+	defer wc.initialEventsEndBookmarkSentMutex.RUnlock()
+	return wc.isInitialEventsEndBookmarkSentLocked()
+}
+
+// isInitialEventsEndBookmarkSentLocked checks if
+// the given watchChan has sent an annotated
+// bookmark event marking the end of streaming.
+//
+// For more information see the watch-list feature.
+func (wc *watchChan) isInitialEventsEndBookmarkSentLocked() bool {
+	return wc.initialEventsEndBookmarkSent
+}
+
+// setInitialEventsEndBookmarkSent marks that the given watchChan
+// has sent an annotated bookmark event.
+func (wc *watchChan) setInitialEventsEndBookmarkSent(event *watch.Event) {
+	if event.Type == watch.Bookmark {
+		// minimize contention and allow concurrent read access
+		// by first checking if there is work to do.
+		wc.initialEventsEndBookmarkSentMutex.RLock()
+		initialEventsEndBookmarkSent := wc.isInitialEventsEndBookmarkSentLocked()
+		wc.initialEventsEndBookmarkSentMutex.RUnlock()
+		if initialEventsEndBookmarkSent {
+			return
+		}
+		// ok, now we now that a write operation is necessary
+		// also note that a write lock is rare
+		// compared to the frequency of read access
+		// in fact this code we be executed
+		// exactly once
+		wc.initialEventsEndBookmarkSentMutex.Lock()
+		defer wc.initialEventsEndBookmarkSentMutex.Unlock()
+		wc.initialEventsEndBookmarkSent = true
+	}
+}
+
+func (wc *watchChan) getCurrentResourceVersionFromStorage() (uint64, error) {
+	// TODO: implement
+	return 0, nil
 }
 
 func decodeObj(codec runtime.Codec, versioner storage.Versioner, data []byte, rev int64) (_ runtime.Object, err error) {
