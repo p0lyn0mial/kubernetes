@@ -106,11 +106,10 @@ type watchChan struct {
 	// when this variable is set to false,
 	// it means we don't have any specific
 	// preferences for delivering bookmark events.
+	//
+	// note that this variable is intent to be
+	// only accessed by the startWatching goroutine
 	initialEventsEndBookmarkSent bool
-	// initialEventsEndBookmarkSentMutex protects initialEventsEndBookmarkSent
-	// this field needs to be protected because there are two
-	// goroutines accessing it.
-	initialEventsEndBookmarkSentMutex sync.RWMutex
 }
 
 func newWatcher(client *clientv3.Client, codec runtime.Codec, groupResource schema.GroupResource, newFunc func() runtime.Object, versioner storage.Versioner) *watcher {
@@ -301,11 +300,8 @@ func logWatchChannelErr(err error) {
 // - get current objects if initialRev=0; set initialRev to current rev
 // - watch on given key and send events to process.
 func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
-	// since we start watching the other goroutine cannot
-	// receive any bookmark events thus it's safe to read the value once
-	initialEventsEndBookmarkSent := wc.isInitialEventsEndBookmarkSent()
 	listObjects := wc.initialRev == 0
-	if wc.initialRev > 0 && !initialEventsEndBookmarkSent {
+	if wc.initialRev > 0 && !wc.initialEventsEndBookmarkSent {
 		currentStorageRV, err := wc.getCurrentResourceVersionFromStorage()
 		if err != nil {
 			err = fmt.Errorf("failed to get the current resource version from the storage: %w", err)
@@ -326,8 +322,13 @@ func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 			return
 		}
 	}
-	if !initialEventsEndBookmarkSent {
-		wc.sendEvent(progressNotifyEvent(wc.initialRev))
+	if !wc.initialEventsEndBookmarkSent {
+		wc.sendEvent(func() *event {
+			e := progressNotifyEvent(wc.initialRev)
+			e.isInitialEventsEndBookmark = true
+			return e
+		}())
+		wc.initialEventsEndBookmarkSent = true
 	}
 	opts := []clientv3.OpOption{clientv3.WithRev(wc.initialRev + 1), clientv3.WithPrevKV()}
 	if wc.recursive {
@@ -388,7 +389,6 @@ func (wc *watchChan) processEvent(wg *sync.WaitGroup) {
 			// The worst case would be closing the fast watcher.
 			select {
 			case wc.resultChan <- *res:
-				wc.setInitialEventsEndBookmarkSent(res)
 			case <-wc.ctx.Done():
 				return
 			}
@@ -429,7 +429,7 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 			utilruntime.HandleError(fmt.Errorf("failed to propagate object version: %v", err))
 			return nil
 		}
-		if !wc.isInitialEventsEndBookmarkSent() {
+		if e.isInitialEventsEndBookmark {
 			objMeta, err := meta.Accessor(object)
 			if err != nil {
 				utilruntime.HandleError(fmt.Errorf("error while accessing object's metadata obj: %#v, err: %v", object, err))
@@ -557,46 +557,6 @@ func (wc *watchChan) prepareObjs(e *event) (curObj runtime.Object, oldObj runtim
 		}
 	}
 	return curObj, oldObj, nil
-}
-
-// isInitialEventsEndBookmarkSent same as isInitialEventsEndBookmarkSentLocked
-// just acquires the lock.
-func (wc *watchChan) isInitialEventsEndBookmarkSent() bool {
-	wc.initialEventsEndBookmarkSentMutex.RLock()
-	defer wc.initialEventsEndBookmarkSentMutex.RUnlock()
-	return wc.isInitialEventsEndBookmarkSentLocked()
-}
-
-// isInitialEventsEndBookmarkSentLocked checks if
-// the given watchChan has sent an annotated
-// bookmark event marking the end of streaming.
-//
-// For more information see the watch-list feature.
-func (wc *watchChan) isInitialEventsEndBookmarkSentLocked() bool {
-	return wc.initialEventsEndBookmarkSent
-}
-
-// setInitialEventsEndBookmarkSent marks that the given watchChan
-// has sent an annotated bookmark event.
-func (wc *watchChan) setInitialEventsEndBookmarkSent(event *watch.Event) {
-	if event.Type == watch.Bookmark {
-		// minimize contention and allow concurrent read access
-		// by first checking if there is work to do.
-		wc.initialEventsEndBookmarkSentMutex.RLock()
-		initialEventsEndBookmarkSent := wc.isInitialEventsEndBookmarkSentLocked()
-		wc.initialEventsEndBookmarkSentMutex.RUnlock()
-		if initialEventsEndBookmarkSent {
-			return
-		}
-		// ok, now we now that a write operation is necessary
-		// also note that a write lock is rare
-		// compared to the frequency of read access
-		// in fact this code we be executed
-		// exactly once
-		wc.initialEventsEndBookmarkSentMutex.Lock()
-		defer wc.initialEventsEndBookmarkSentMutex.Unlock()
-		wc.initialEventsEndBookmarkSent = true
-	}
 }
 
 func (wc *watchChan) getCurrentResourceVersionFromStorage() (uint64, error) {
