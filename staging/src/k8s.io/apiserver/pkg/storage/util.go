@@ -17,12 +17,16 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"fmt"
-	"sync/atomic"
+	"strconv"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/validation/path"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sync/atomic"
 )
 
 type SimpleUpdateFunc func(runtime.Object) (runtime.Object, error)
@@ -78,4 +82,40 @@ func (hwm *HighWaterMark) Update(current int64) bool {
 			return true
 		}
 	}
+}
+
+// GetCurrentResourceVersionFromStorage gets the current resource version from the underlying storage engine.
+// This method issues an empty list request and reads only the ResourceVersion from the object metadata
+func GetCurrentResourceVersionFromStorage(ctx context.Context, s Interface, newListFunc func() runtime.Object, resourcePrefix, objectType string) (uint64, error) {
+	if newListFunc == nil {
+		return 0, fmt.Errorf("newListFunction wasn't provided for %s", objectType)
+	}
+	emptyList := newListFunc()
+	pred := SelectionPredicate{
+		Label: labels.Everything(),
+		Field: fields.Everything(),
+		Limit: 1, // just in case we actually hit something
+	}
+
+	err := s.GetList(ctx, resourcePrefix, ListOptions{Predicate: pred}, emptyList)
+	if err != nil {
+		return 0, err
+	}
+	emptyListAccessor, err := meta.ListAccessor(emptyList)
+	if err != nil {
+		return 0, err
+	}
+	if emptyListAccessor == nil {
+		return 0, fmt.Errorf("unable to extract a list accessor from %T", emptyList)
+	}
+
+	currentResourceVersion, err := strconv.Atoi(emptyListAccessor.GetResourceVersion())
+	if err != nil {
+		return 0, err
+	}
+
+	if currentResourceVersion == 0 {
+		return 0, fmt.Errorf("the current resource version must be greater than 0")
+	}
+	return uint64(currentResourceVersion), nil
 }
