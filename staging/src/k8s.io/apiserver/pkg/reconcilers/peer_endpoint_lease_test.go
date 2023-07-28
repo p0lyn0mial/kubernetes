@@ -91,7 +91,7 @@ func TestPeerEndpointLeaseReconciler(t *testing.T) {
 	newFunc := func() runtime.Object { return &corev1.Endpoints{} }
 	sc.Codec = apitesting.TestStorageCodec(codecs, corev1.SchemeGroupVersion)
 
-	s, dFunc, err := factory.Create(*sc.ForResource(schema.GroupResource{Resource: "endpoints"}), newFunc)
+	s, dFunc, err := factory.Create(*sc.ForResource(schema.GroupResource{Resource: "endpoints"}), newFunc, nil, "")
 	if err != nil {
 		t.Fatalf("Error creating storage: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestPeerLeaseRemoveEndpoints(t *testing.T) {
 	newFunc := func() runtime.Object { return &corev1.Endpoints{} }
 	sc.Codec = apitesting.TestStorageCodec(codecs, corev1.SchemeGroupVersion)
 
-	s, dFunc, err := factory.Create(*sc.ForResource(schema.GroupResource{Resource: "pods"}), newFunc)
+	s, dFunc, err := factory.Create(*sc.ForResource(schema.GroupResource{Resource: "pods"}), newFunc, nil, "")
 	if err != nil {
 		t.Fatalf("Error creating storage: %v", err)
 	}
