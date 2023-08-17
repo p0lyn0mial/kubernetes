@@ -73,12 +73,16 @@ func TestOnlySetFatalOnDecodeError(b bool) {
 }
 
 type watcher struct {
-	client        *clientv3.Client
-	codec         runtime.Codec
-	newFunc       func() runtime.Object
-	objectType    string
-	groupResource schema.GroupResource
-	versioner     storage.Versioner
+	client         *clientv3.Client
+	codec          runtime.Codec
+	newFunc        func() runtime.Object
+	newListFunc    func() runtime.Object
+	objectType     string
+	groupResource  schema.GroupResource
+	versioner      storage.Versioner
+	transformer    value.Transformer
+	storage        storage.Interface
+	resourcePrefix string
 }
 
 // watchChan implements watch.Interface.
@@ -110,15 +114,24 @@ type watchChan struct {
 	// note that this variable is intent to be
 	// only accessed by the startWatching goroutine
 	initialEventsEndBookmarkSent bool
+
+	newListFunc    func() runtime.Object
+	storageImpl    storage.Interface
+	resourcePrefix string
+	objectType     string
 }
 
-func newWatcher(client *clientv3.Client, codec runtime.Codec, groupResource schema.GroupResource, newFunc func() runtime.Object, versioner storage.Versioner) *watcher {
+func newWatcher(client *clientv3.Client, codec runtime.Codec, groupResource schema.GroupResource, newFunc, newListFunc func() runtime.Object, versioner storage.Versioner, transformer value.Transformer, storage storage.Interface, resourcePrefix string) *watcher {
 	res := &watcher{
-		client:        client,
-		codec:         codec,
-		groupResource: groupResource,
-		newFunc:       newFunc,
-		versioner:     versioner,
+		client:         client,
+		codec:          codec,
+		groupResource:  groupResource,
+		newFunc:        newFunc,
+		newListFunc:    newListFunc,
+		versioner:      versioner,
+		transformer:    transformer,
+		storage:        storage,
+		resourcePrefix: resourcePrefix,
 	}
 	if newFunc == nil {
 		res.objectType = "<unknown>"
@@ -135,7 +148,7 @@ func newWatcher(client *clientv3.Client, codec runtime.Codec, groupResource sche
 // If opts.Recursive is false, it watches on given key.
 // If opts.Recursive is true, it watches any children and directories under the key, excluding the root key itself.
 // pred must be non-nil. Only if opts.Predicate matches the change, it will be returned.
-func (w *watcher) Watch(ctx context.Context, key string, rev int64, transformer value.Transformer, opts storage.ListOptions) (watch.Interface, error) {
+func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage.ListOptions) (watch.Interface, error) {
 	if opts.Recursive && !strings.HasSuffix(key, "/") {
 		key += "/"
 	}
@@ -159,7 +172,7 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, transformer 
 		progressNotify = true
 		initialEventsEndBookmarkRequired = true
 	}
-	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, progressNotify, initialEventsEndBookmarkRequired, transformer, opts.Predicate)
+	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, progressNotify, initialEventsEndBookmarkRequired, w.transformer, opts.Predicate, w.storage, w.newListFunc, w.resourcePrefix, w.objectType)
 	go wc.run()
 
 	// For etcd watch we don't have an easy way to answer whether the watch
@@ -172,7 +185,7 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, transformer 
 	return wc, nil
 }
 
-func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify, initialEventsEndBookmarkRequired bool, transformer value.Transformer, pred storage.SelectionPredicate) *watchChan {
+func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify, initialEventsEndBookmarkRequired bool, transformer value.Transformer, pred storage.SelectionPredicate, storageImpl storage.Interface, newListFunc func() runtime.Object, resourcePrefix string, objectType string) *watchChan {
 	wc := &watchChan{
 		watcher:                      w,
 		transformer:                  transformer,
@@ -185,6 +198,10 @@ func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, re
 		resultChan:                   make(chan watch.Event, outgoingBufSize),
 		errChan:                      make(chan error, 1),
 		initialEventsEndBookmarkSent: !initialEventsEndBookmarkRequired,
+		resourcePrefix:               resourcePrefix,
+		objectType:                   objectType,
+		newListFunc:                  newListFunc,
+		storageImpl:                  storageImpl,
 	}
 	if pred.Empty() {
 		// The filter doesn't filter out any object.
@@ -302,7 +319,7 @@ func logWatchChannelErr(err error) {
 func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 	listObjects := wc.initialRev == 0
 	if wc.initialRev > 0 && !wc.initialEventsEndBookmarkSent {
-		currentStorageRV, err := wc.getCurrentResourceVersionFromStorage()
+		currentStorageRV, err := storage.GetCurrentResourceVersionFromStorage(wc.ctx, wc.storageImpl, wc.newListFunc, wc.resourcePrefix, wc.objectType)
 		if err != nil {
 			err = fmt.Errorf("failed to get the current resource version from the storage: %w", err)
 			wc.sendError(err)
@@ -557,11 +574,6 @@ func (wc *watchChan) prepareObjs(e *event) (curObj runtime.Object, oldObj runtim
 		}
 	}
 	return curObj, oldObj, nil
-}
-
-func (wc *watchChan) getCurrentResourceVersionFromStorage() (uint64, error) {
-	// TODO: implement
-	return 0, nil
 }
 
 func decodeObj(codec runtime.Codec, versioner storage.Versioner, data []byte, rev int64) (_ runtime.Object, err error) {

@@ -466,14 +466,16 @@ func (r *clientRecorder) GetReadsAndReset() uint64 {
 }
 
 type setupOptions struct {
-	client        func(testing.TB) *clientv3.Client
-	codec         runtime.Codec
-	newFunc       func() runtime.Object
-	prefix        string
-	groupResource schema.GroupResource
-	transformer   value.Transformer
-	pagingEnabled bool
-	leaseConfig   LeaseManagerConfig
+	client         func(testing.TB) *clientv3.Client
+	codec          runtime.Codec
+	newFunc        func() runtime.Object
+	newListFunc    func() runtime.Object
+	prefix         string
+	resourcePrefix string
+	groupResource  schema.GroupResource
+	transformer    value.Transformer
+	pagingEnabled  bool
+	leaseConfig    LeaseManagerConfig
 
 	recorderEnabled bool
 }
@@ -541,7 +543,9 @@ func testSetup(t testing.TB, opts ...setupOption) (context.Context, *store, *cli
 		client,
 		setupOpts.codec,
 		setupOpts.newFunc,
+		setupOpts.newListFunc,
 		setupOpts.prefix,
+		setupOpts.resourcePrefix,
 		setupOpts.groupResource,
 		setupOpts.transformer,
 		setupOpts.pagingEnabled,

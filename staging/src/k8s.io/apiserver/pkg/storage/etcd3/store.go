@@ -121,9 +121,9 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 		pathPrefix:          pathPrefix,
 		groupResource:       groupResource,
 		groupResourceString: groupResource.String(),
-		watcher:             newWatcher(c, codec, groupResource, newFunc, versioner),
 		leaseManager:        newDefaultLeaseManager(c, leaseManagerConfig),
 	}
+	result.watcher = newWatcher(c, codec, groupResource, newFunc, newListFunc, versioner, transformer, result, resourcePrefix)
 	return result
 }
 
@@ -878,7 +878,7 @@ func (s *store) Watch(ctx context.Context, key string, opts storage.ListOptions)
 	if err != nil {
 		return nil, err
 	}
-	return s.watcher.Watch(s.watchContext(ctx), preparedKey, int64(rev), s.transformer, opts)
+	return s.watcher.Watch(s.watchContext(ctx), preparedKey, int64(rev), opts)
 }
 
 func (s *store) watchContext(ctx context.Context) context.Context {
