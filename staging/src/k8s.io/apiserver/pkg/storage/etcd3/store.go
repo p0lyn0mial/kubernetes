@@ -114,14 +114,15 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 		pathPrefix += "/"
 	}
 
-	// TODO(p0lyn0mial): pass newListFunc and resourcePrefix to the watcher
 	w := &watcher{
-		client:        c,
-		codec:         codec,
-		groupResource: groupResource,
-		newFunc:       newFunc,
-		versioner:     versioner,
-		transformer:   transformer,
+		client:         c,
+		codec:          codec,
+		newFunc:        newFunc,
+		newListFunc:    newListFunc,
+		resourcePrefix: resourcePrefix,
+		groupResource:  groupResource,
+		versioner:      versioner,
+		transformer:    transformer,
 	}
 	if newFunc == nil {
 		w.objectType = "<unknown>"

@@ -19,6 +19,7 @@ package etcd3
 import (
 	"context"
 	"fmt"
+
 	"os"
 	"strconv"
 	"strings"
@@ -28,12 +29,17 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/etcd3/metrics"
 	"k8s.io/apiserver/pkg/storage/value"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	utilflowcontrol "k8s.io/apiserver/pkg/util/flowcontrol"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -45,6 +51,11 @@ const (
 	// We have set a buffer in order to reduce times of context switches.
 	incomingBufSize = 100
 	outgoingBufSize = 100
+
+	// resourceVersionTooHighRetrySeconds is the seconds before
+	// an operation should be retried by the client
+	// after receiving a 'too high resource version' error.
+	resourceVersionTooHighRetrySeconds = 1
 )
 
 // fatalOnDecodeError is used during testing to panic the server if watcher encounters a decoding error
@@ -62,13 +73,15 @@ func TestOnlySetFatalOnDecodeError(b bool) {
 }
 
 type watcher struct {
-	client        *clientv3.Client
-	codec         runtime.Codec
-	newFunc       func() runtime.Object
-	objectType    string
-	groupResource schema.GroupResource
-	versioner     storage.Versioner
-	transformer   value.Transformer
+	client         *clientv3.Client
+	codec          runtime.Codec
+	newFunc        func() runtime.Object
+	newListFunc    func() runtime.Object
+	objectType     string
+	resourcePrefix string
+	groupResource  schema.GroupResource
+	versioner      storage.Versioner
+	transformer    value.Transformer
 }
 
 // watchChan implements watch.Interface.
@@ -84,6 +97,21 @@ type watchChan struct {
 	incomingEventChan chan *event
 	resultChan        chan watch.Event
 	errChan           chan error
+	// initialEventsEndBookmarkSent helps us keep track
+	// of whether we have sent an annotated bookmark event.
+	//
+	// it's important to note that we don't
+	// need to track the actual RV because
+	// we only send the bookmark event
+	// after the initial list call.
+	//
+	// when this variable is set to false,
+	// it means we don't have any specific
+	// preferences for delivering bookmark events.
+	//
+	// note that this variable is intent to be
+	// only accessed by the startWatching goroutine
+	initialEventsEndBookmarkSent bool
 }
 
 // Watch watches on a key and returns a watch.Interface that transfers relevant notifications.
@@ -97,7 +125,27 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 	if opts.Recursive && !strings.HasSuffix(key, "/") {
 		key += "/"
 	}
-	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, opts.ProgressNotify, opts.Predicate)
+	var initialEventsEndBookmarkRequired bool
+	progressNotify := opts.ProgressNotify
+	if utilfeature.DefaultFeatureGate.Enabled(features.WatchList) &&
+		opts.SendInitialEvents != nil &&
+		*opts.SendInitialEvents &&
+		opts.Predicate.AllowWatchBookmarks {
+		if w.newFunc == nil {
+			return nil, apierrors.NewInvalid(
+				schema.GroupKind{Group: w.groupResource.Group, Kind: w.groupResource.Resource},
+				"",
+				field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is unsupported by the etcd storage because no newFunc was provided")},
+			)
+		}
+		// since there is no way to directly set
+		// opts.ProgressNotify from the API
+		// we need to take into account the value
+		// stored at opts.Predicate.AllowWatchBookmarks
+		progressNotify = true
+		initialEventsEndBookmarkRequired = true
+	}
+	wc := w.createWatchChan(ctx, key, rev, opts.Recursive, progressNotify, initialEventsEndBookmarkRequired, opts.Predicate)
 	go wc.run()
 
 	// For etcd watch we don't have an easy way to answer whether the watch
@@ -110,17 +158,18 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 	return wc, nil
 }
 
-func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify bool, pred storage.SelectionPredicate) *watchChan {
+func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify bool, initialEventsEndBookmarkRequired bool, pred storage.SelectionPredicate) *watchChan {
 	wc := &watchChan{
-		watcher:           w,
-		key:               key,
-		initialRev:        rev,
-		recursive:         recursive,
-		progressNotify:    progressNotify,
-		internalPred:      pred,
-		incomingEventChan: make(chan *event, incomingBufSize),
-		resultChan:        make(chan watch.Event, outgoingBufSize),
-		errChan:           make(chan error, 1),
+		watcher:                      w,
+		key:                          key,
+		initialRev:                   rev,
+		recursive:                    recursive,
+		progressNotify:               progressNotify,
+		internalPred:                 pred,
+		incomingEventChan:            make(chan *event, incomingBufSize),
+		resultChan:                   make(chan watch.Event, outgoingBufSize),
+		errChan:                      make(chan error, 1),
+		initialEventsEndBookmarkSent: !initialEventsEndBookmarkRequired,
 	}
 	if pred.Empty() {
 		// The filter doesn't filter out any object.
@@ -236,12 +285,35 @@ func logWatchChannelErr(err error) {
 // - get current objects if initialRev=0; set initialRev to current rev
 // - watch on given key and send events to process.
 func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
-	if wc.initialRev == 0 {
+	listObjects := wc.initialRev == 0
+	if wc.initialRev > 0 && !wc.initialEventsEndBookmarkSent {
+		currentStorageRV, err := storage.GetCurrentResourceVersionFromStorage(wc.ctx, nil /*TODO(p0lyn0mial): fix me*/, wc.watcher.newListFunc, wc.watcher.resourcePrefix, wc.watcher.objectType)
+		if err != nil {
+			err = fmt.Errorf("failed to get the current resource version from the storage: %w", err)
+			wc.sendError(err)
+			return
+		}
+		if uint64(wc.initialRev) > currentStorageRV {
+			// TODO: add some jitter to resourceVersionTooHighRetrySeconds
+			wc.sendError(storage.NewTooLargeResourceVersionError(uint64(wc.initialRev), currentStorageRV, resourceVersionTooHighRetrySeconds))
+			return
+		}
+		listObjects = true
+	}
+	if listObjects {
 		if err := wc.sync(); err != nil {
 			klog.Errorf("failed to sync with latest state: %v", err)
 			wc.sendError(err)
 			return
 		}
+	}
+	if !wc.initialEventsEndBookmarkSent {
+		wc.sendEvent(func() *event {
+			e := progressNotifyEvent(wc.initialRev)
+			e.isInitialEventsEndBookmark = true
+			return e
+		}())
+		wc.initialEventsEndBookmarkSent = true
 	}
 	opts := []clientv3.OpOption{clientv3.WithRev(wc.initialRev + 1), clientv3.WithPrevKV()}
 	if wc.recursive {
@@ -341,6 +413,20 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 		if err := wc.watcher.versioner.UpdateObject(object, uint64(e.rev)); err != nil {
 			klog.Errorf("failed to propagate object version: %v", err)
 			return nil
+		}
+		if e.isInitialEventsEndBookmark {
+			objMeta, err := meta.Accessor(object)
+			if err != nil {
+				utilruntime.HandleError(fmt.Errorf("error while accessing object's metadata obj: %#v, err: %v", object, err))
+				return nil
+			}
+			objAnnotations := objMeta.GetAnnotations()
+			if objAnnotations == nil {
+				objAnnotations = map[string]string{}
+			}
+			// TODO: move to a const
+			objAnnotations["k8s.io/initial-events-end"] = "true"
+			objMeta.SetAnnotations(objAnnotations)
 		}
 		res = &watch.Event{
 			Type:   watch.Bookmark,
