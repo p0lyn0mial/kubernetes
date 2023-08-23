@@ -82,6 +82,7 @@ type watcher struct {
 	groupResource  schema.GroupResource
 	versioner      storage.Versioner
 	transformer    value.Transformer
+	storage        storage.Interface
 }
 
 // watchChan implements watch.Interface.
@@ -136,6 +137,13 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 				schema.GroupKind{Group: w.groupResource.Group, Kind: w.groupResource.Resource},
 				"",
 				field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is unsupported by the etcd storage because no newFunc was provided")},
+			)
+		}
+		if w.storage == nil {
+			return nil, apierrors.NewInvalid(
+				schema.GroupKind{Group: w.groupResource.Group, Kind: w.groupResource.Resource},
+				"",
+				field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is unsupported by the etcd storage because no storage impl was provided")},
 			)
 		}
 		// since there is no way to directly set
@@ -287,7 +295,7 @@ func logWatchChannelErr(err error) {
 func (wc *watchChan) startWatching(watchClosedCh chan struct{}) {
 	listObjects := wc.initialRev == 0
 	if wc.initialRev > 0 && !wc.initialEventsEndBookmarkSent {
-		currentStorageRV, err := storage.GetCurrentResourceVersionFromStorage(wc.ctx, nil /*TODO(p0lyn0mial): fix me*/, wc.watcher.newListFunc, wc.watcher.resourcePrefix, wc.watcher.objectType)
+		currentStorageRV, err := storage.GetCurrentResourceVersionFromStorage(wc.ctx, wc.watcher.storage, wc.watcher.newListFunc, wc.watcher.resourcePrefix, wc.watcher.objectType)
 		if err != nil {
 			err = fmt.Errorf("failed to get the current resource version from the storage: %w", err)
 			wc.sendError(err)

@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/audit"
 	"k8s.io/apiserver/pkg/features"
@@ -113,22 +114,6 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 		pathPrefix += "/"
 	}
 
-	w := &watcher{
-		client:         c,
-		codec:          codec,
-		newFunc:        newFunc,
-		newListFunc:    newListFunc,
-		resourcePrefix: resourcePrefix,
-		groupResource:  groupResource,
-		versioner:      versioner,
-		transformer:    transformer,
-	}
-	if newFunc == nil {
-		w.objectType = "<unknown>"
-	} else {
-		w.objectType = reflect.TypeOf(newFunc()).String()
-	}
-
 	s := &store{
 		client:              c,
 		codec:               codec,
@@ -138,9 +123,27 @@ func newStore(c *clientv3.Client, codec runtime.Codec, newFunc, newListFunc func
 		pathPrefix:          pathPrefix,
 		groupResource:       groupResource,
 		groupResourceString: groupResource.String(),
-		watcher:             w,
 		leaseManager:        newDefaultLeaseManager(c, leaseManagerConfig),
 	}
+
+	w := &watcher{
+		client:         c,
+		codec:          codec,
+		newFunc:        newFunc,
+		newListFunc:    newListFunc,
+		resourcePrefix: resourcePrefix,
+		groupResource:  groupResource,
+		versioner:      versioner,
+		transformer:    transformer,
+		storage:        s,
+	}
+	if newFunc == nil {
+		w.objectType = "<unknown>"
+	} else {
+		w.objectType = reflect.TypeOf(newFunc()).String()
+	}
+
+	s.watcher = w
 	return s
 }
 
@@ -886,7 +889,18 @@ func growSlice(v reflect.Value, maxCapacity int, sizes ...int) {
 }
 
 // Watch implements storage.Interface.Watch.
+// TODO(#115478): In order to graduate the WatchList feature to beta, the etcd3 implementation must/should also support it.
 func (s *store) Watch(ctx context.Context, key string, opts storage.ListOptions) (watch.Interface, error) {
+	// it is safe to skip SendInitialEvents if the request is backward compatible
+	// see https://github.com/kubernetes/kubernetes/blob/267eb25e60955fe8e438c6311412e7cf7d028acb/staging/src/k8s.io/apiserver/pkg/storage/etcd3/watcher.go#L260
+	compatibility := opts.Predicate.AllowWatchBookmarks == false && (opts.ResourceVersion == "" || opts.ResourceVersion == "0")
+	if opts.SendInitialEvents != nil && !compatibility {
+		return nil, apierrors.NewInvalid(
+			schema.GroupKind{Group: s.groupResource.Group, Kind: s.groupResource.Resource},
+			"",
+			field.ErrorList{field.Forbidden(field.NewPath("sendInitialEvents"), "for watch is unsupported by an etcd cluster")},
+		)
+	}
 	preparedKey, err := s.prepareKey(key)
 	if err != nil {
 		return nil, err
