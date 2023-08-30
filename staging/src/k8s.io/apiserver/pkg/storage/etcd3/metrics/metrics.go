@@ -113,6 +113,14 @@ var (
 		},
 		[]string{"resource"},
 	)
+	etcdRequestRetry = compbasemetrics.NewCounterVec(
+		&compbasemetrics.CounterOpts{
+			Name:           "etcd_request_retry_total",
+			Help:           "Etcd request retry total",
+			StabilityLevel: compbasemetrics.ALPHA,
+		},
+		[]string{"error"},
+	)
 )
 
 var registerMetrics sync.Once
@@ -130,12 +138,18 @@ func Register() {
 		legacyregistry.MustRegister(listStorageNumFetched)
 		legacyregistry.MustRegister(listStorageNumSelectorEvals)
 		legacyregistry.MustRegister(listStorageNumReturned)
+		legacyregistry.MustRegister(etcdRequestRetry)
 	})
 }
 
 // UpdateObjectCount sets the apiserver_storage_object_counts metric.
 func UpdateObjectCount(resourcePrefix string, count int64) {
 	objectCounts.WithLabelValues(resourcePrefix).Set(float64(count))
+}
+
+// UpdateEtcdRequestRetry sets the etcd_request_retry_total metric.
+func UpdateEtcdRequestRetry(errorCode string) {
+	etcdRequestRetry.WithLabelValues(errorCode).Inc()
 }
 
 // RecordEtcdRequestLatency sets the etcd_request_duration_seconds metrics.
