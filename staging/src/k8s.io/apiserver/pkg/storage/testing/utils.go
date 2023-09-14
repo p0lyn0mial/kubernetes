@@ -102,13 +102,20 @@ func testPropagateStore(ctx context.Context, t *testing.T, store storage.Interfa
 
 func ExpectNoDiff(t *testing.T, msg string, expected, got interface{}) {
 	t.Helper()
-	if !reflect.DeepEqual(expected, got) {
-		if diff := cmp.Diff(expected, got); diff != "" {
-			t.Errorf("%s: %s", msg, diff)
-		} else {
-			t.Errorf("%s:\nexpected: %#v\ngot: %#v", msg, expected, got)
-		}
+	equal, diff := areObjectEqual(expected, got)
+	if !equal {
+		t.Errorf("%s: %s", msg, diff)
 	}
+}
+
+func areObjectEqual(expected, actual interface{}) (bool, string) {
+	if !reflect.DeepEqual(expected, actual) {
+		if diff := cmp.Diff(expected, actual); diff != "" {
+			return false, diff
+		}
+		return false, fmt.Sprintf("expected: %#v\nactual: %#v", expected, actual)
+	}
+	return true, ""
 }
 
 func ExpectContains(t *testing.T, msg string, expectedList []interface{}, got interface{}) {
@@ -155,6 +162,43 @@ func testCheckResult(t *testing.T, expectEventType watch.EventType, w watch.Inte
 		ExpectNoDiff(t, "incorrect object", expectObj, object)
 		return nil
 	})
+}
+
+func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
+	for _, expectedEvent := range expectedEvents {
+		testCheckResultFunc(t, expectedEvent.Type, w, func(actualObject runtime.Object) error {
+			ExpectNoDiff(t, "incorrect object", expectedEvent.Object, actualObject)
+			return nil
+		})
+	}
+}
+
+func testCheckResultsInRandomOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
+	for _, expectedEvent := range expectedEvents {
+		testCheckResultFunc(t, expectedEvent.Type, w, func(actualObject runtime.Object) error {
+			found := false
+			for _, e := range expectedEvents {
+				equal, _ := areObjectEqual(e, actualObject)
+				if equal {
+					found = true
+					break
+				}
+			}
+			if !found {
+				fmt.Errorf("expected: %#v but didn't find", actualObject)
+			}
+			return nil
+		})
+	}
+}
+
+func testCheckNoMoreResults(t *testing.T, w watch.Interface) {
+	select {
+	case e := <-w.ResultChan():
+		t.Errorf("Unexpected: %#v event received, expected no events", e)
+	case <-time.After(time.Second):
+		return
+	}
 }
 
 func testCheckResultFunc(t *testing.T, expectEventType watch.EventType, w watch.Interface, check func(object runtime.Object) error) {
