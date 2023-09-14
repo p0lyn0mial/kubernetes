@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"path"
 	"reflect"
+	goruntime "runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -158,15 +159,17 @@ func testCheckEventType(t *testing.T, expectEventType watch.EventType, w watch.I
 }
 
 func testCheckResult(t *testing.T, expectEventType watch.EventType, w watch.Interface, expectObj runtime.Object) {
-	testCheckResultFunc(t, expectEventType, w, func(object runtime.Object) error {
-		ExpectNoDiff(t, "incorrect object", expectObj, object)
+	testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
+		ExpectNoDiff(t, "incorrect event type", expectEventType, actualEventType)
+		ExpectNoDiff(t, "incorrect object", expectObj, actualObject)
 		return nil
 	})
 }
 
 func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
 	for _, expectedEvent := range expectedEvents {
-		testCheckResultFunc(t, expectedEvent.Type, w, func(actualObject runtime.Object) error {
+		testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
+			ExpectNoDiff(t, "incorrect event type", expectedEvent.Type, actualEventType)
 			ExpectNoDiff(t, "incorrect object", expectedEvent.Object, actualObject)
 			return nil
 		})
@@ -174,21 +177,30 @@ func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEven
 }
 
 func testCheckResultsInRandomOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
-	for _, expectedEvent := range expectedEvents {
-		testCheckResultFunc(t, expectedEvent.Type, w, func(actualObject runtime.Object) error {
-			found := false
+	_, file, line, _ := goruntime.Caller(1)
+	for _, _ = range expectedEvents {
+		var lastReceivedEventType watch.EventType
+		var lastReceivedObject runtime.Object
+		found := false
+		testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
+			lastReceivedEventType = actualEventType
+			lastReceivedObject = actualObject
 			for _, e := range expectedEvents {
-				equal, _ := areObjectEqual(e, actualObject)
+				equal, _ := areObjectEqual(e.Type, actualEventType)
+				if !equal {
+					continue
+				}
+				equal, _ = areObjectEqual(e.Object, actualObject)
 				if equal {
 					found = true
 					break
 				}
 			}
-			if !found {
-				fmt.Errorf("expected: %#v but didn't find", actualObject)
-			}
 			return nil
 		})
+		if !found {
+			t.Fatalf("(called from %v:%v), recevied unexpected type: %v, and object: %#v", file, line, lastReceivedEventType, lastReceivedObject)
+		}
 	}
 }
 
@@ -201,18 +213,14 @@ func testCheckNoMoreResults(t *testing.T, w watch.Interface) {
 	}
 }
 
-func testCheckResultFunc(t *testing.T, expectEventType watch.EventType, w watch.Interface, check func(object runtime.Object) error) {
+func testCheckResultFunc(t *testing.T, w watch.Interface, check func(actualEventType watch.EventType, actualObject runtime.Object) error) {
 	select {
 	case res := <-w.ResultChan():
-		if res.Type != expectEventType {
-			t.Errorf("event type want=%v, get=%v", expectEventType, res.Type)
-			return
-		}
 		obj := res.Object
 		if co, ok := obj.(runtime.CacheableObject); ok {
 			obj = co.GetObject()
 		}
-		if err := check(obj); err != nil {
+		if err := check(res.Type, obj); err != nil {
 			t.Error(err)
 		}
 	case <-time.After(wait.ForeverTestTimeout):
