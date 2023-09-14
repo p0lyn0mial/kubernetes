@@ -1222,7 +1222,7 @@ func RunSendInitialEventsBackwardCompatibility(ctx context.Context, t *testing.T
 	w.Stop()
 }
 
-func TestCacherWatchSemantics(t *testing.T) {
+func RunWatchSemantics(ctx context.Context, t *testing.T, newStorage func() (storage.Interface, func(storageRV string), func())) {
 	trueVal, falseVal := true, false
 	makePod := func(rv uint64) *example.Pod {
 		return &example.Pod{
@@ -1250,6 +1250,8 @@ func TestCacherWatchSemantics(t *testing.T) {
 		expectedEventsAfterEstablishingWatch []watch.Event
 	}{
 		{
+			// TODO: this is a test case specific to the watch cache.
+			//   assumes the underlying store can be behind which doesn't apply to the etcd impl.
 			name:                               "allowWatchBookmarks=true, sendInitialEvents=true, RV=unset, storageRV=102",
 			allowWatchBookmarks:                true,
 			sendInitialEvents:                  &trueVal,
@@ -1370,53 +1372,40 @@ func TestCacherWatchSemantics(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			// set up env
 			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchList, true)()
-			storageListMetaResourceVersion := ""
-			backingStorage := &dummyStorage{getListFn: func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error {
-				podList := listObj.(*example.PodList)
-				podList.ListMeta = metav1.ListMeta{ResourceVersion: storageListMetaResourceVersion}
-				return nil
-			}}
+			store, storageRVSetter, storeCleanup := newStorage()
+			defer storeCleanup()
 
-			cacher, _, err := newTestCacher(backingStorage)
-			if err != nil {
-				t.Fatalf("falied to create cacher: %v", err)
-			}
-			defer cacher.Stop()
-			if err := cacher.ready.wait(context.TODO()); err != nil {
-				t.Fatalf("unexpected error waiting for the cache to be ready")
-			}
-
-			// now, run a scenario
-			// but first let's add some initial data
+			out := &example.Pod{}
 			for _, obj := range scenario.initialPods {
-				err = cacher.watchCache.Add(obj)
+				err := store.Create(ctx, computePodKey(obj), obj, out, 0)
 				require.NoError(t, err, "failed to add a pod: %v")
 			}
-			// read request params
+
 			opts := storage.ListOptions{Predicate: storage.Everything}
 			opts.SendInitialEvents = scenario.sendInitialEvents
 			opts.Predicate.AllowWatchBookmarks = scenario.allowWatchBookmarks
 			if len(scenario.resourceVersion) > 0 {
 				opts.ResourceVersion = scenario.resourceVersion
 			}
-			// before starting a new watch set a storage RV to some future value
-			storageListMetaResourceVersion = scenario.storageResourceVersion
 
-			w, err := cacher.Watch(context.Background(), "pods/ns", opts)
+			// before starting a new watch set a storage RV to some future value
+			storageRVSetter(scenario.storageResourceVersion)
+
+			w, err := store.Watch(context.Background(), "pods/ns", opts)
 			require.NoError(t, err, "failed to create watch: %v")
 			defer w.Stop()
 
 			// make sure we only get initial events
-			verifyEvents(t, w, scenario.expectedInitialEventsInRandomOrder, false)
-			verifyEvents(t, w, scenario.expectedInitialEventsInStrictOrder, true)
-			verifyNoEvents(t, w)
+			testCheckResultsInRandomOrder(t, w, scenario.expectedInitialEventsInRandomOrder)
+			testCheckResultsInStrictOrder(t, w, scenario.expectedInitialEventsInStrictOrder)
+			testCheckNoMoreResults(t, w)
 			// add a pod that is greater than the storage's RV when the watch was started
 			for _, obj := range scenario.podsAfterEstablishingWatch {
-				err = cacher.watchCache.Add(obj)
+				err = store.Create(ctx, computePodKey(obj), obj, out, 0)
 				require.NoError(t, err, "failed to add a pod: %v")
 			}
-			verifyEvents(t, w, scenario.expectedEventsAfterEstablishingWatch, true)
-			verifyNoEvents(t, w)
+			testCheckResultsInStrictOrder(t, w, scenario.expectedEventsAfterEstablishingWatch)
+			testCheckNoMoreResults(t, w)
 		})
 	}
 }
