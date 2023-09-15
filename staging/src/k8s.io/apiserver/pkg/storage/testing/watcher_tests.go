@@ -280,7 +280,7 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 		Reason: metav1.StatusReasonInternalError,
 	}
 	testCheckResultFunc(t, tooOldWatcher, func(actualEvent watch.Event) {
-		assertObjectsAreEqual(t, "incorrect event type", watch.Error, actualEvent.Type)
+		requireObjectsEqual(t, "incorrect event type", watch.Error, actualEvent.Type)
 		if !apiequality.Semantic.DeepDerivative(&expiredError, actualEvent.Object) && !apiequality.Semantic.DeepDerivative(&internalError, actualEvent.Object) {
 			t.Errorf("expected: %#v; got %#v", &expiredError, actualEvent.Object)
 		}
@@ -550,7 +550,7 @@ func RunOptionalTestProgressNotify(ctx context.Context, t *testing.T, store stor
 	// when we send a bookmark event, the client expects the event to contain an
 	// object of the correct type, but with no fields set other than the resourceVersion
 	testCheckResultFunc(t, w, func(actualEvent watch.Event) {
-		assertObjectsAreEqual(t, "incorrect event type", watch.Bookmark, actualEvent.Type)
+		requireObjectsEqual(t, "incorrect event type", watch.Bookmark, actualEvent.Type)
 		// first, check that we have the correct resource version
 		obj, ok := actualEvent.Object.(metav1.Object)
 		if !ok {
@@ -566,7 +566,7 @@ func RunOptionalTestProgressNotify(ctx context.Context, t *testing.T, store stor
 			t.Fatalf("got %T, not *example.Pod", actualEvent.Object)
 		}
 		pod.ResourceVersion = ""
-		assertObjectsAreEqual(t, "bookmark event should contain an object with no fields set other than resourceVersion", &example.Pod{}, pod)
+		requireObjectsEqual(t, "bookmark event should contain an object with no fields set other than resourceVersion", &example.Pod{}, pod)
 	})
 }
 
