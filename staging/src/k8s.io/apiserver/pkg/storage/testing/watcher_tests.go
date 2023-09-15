@@ -187,7 +187,7 @@ func testWatch(ctx context.Context, t *testing.T, store storage.Interface, recur
 						expectObj = prevObj
 						expectObj.ResourceVersion = out.ResourceVersion
 					}
-					testCheckResult(t, watchTest.watchType, w, expectObj)
+					testCheckResult(t, w, watch.Event{Type: watchTest.watchType, Object: expectObj})
 				}
 				prevObj = out
 			}
@@ -209,7 +209,7 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)
 	}
-	testCheckResult(t, watch.Added, w, storedObj)
+	testCheckResult(t, w, watch.Event{Type: watch.Added, Object: storedObj})
 
 	// Update
 	out := &example.Pod{}
@@ -226,7 +226,7 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 	// when testing with the Cacher since we may have to allow for slow
 	// processing by allowing updates to propagate to the watch cache.
 	// This allows for that.
-	testCheckResult(t, watch.Modified, w, out)
+	testCheckResult(t, w, watch.Event{Type: watch.Modified, Object: out})
 	w.Stop()
 
 	// Make sure when we watch from 0 we receive an ADDED event
@@ -235,7 +235,7 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 		t.Fatalf("Watch failed: %v", err)
 	}
 
-	testCheckResult(t, watch.Added, w, out)
+	testCheckResult(t, w, watch.Event{Type: watch.Added, Object: out})
 	w.Stop()
 
 	// Compact previous versions
@@ -262,7 +262,7 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 	if err != nil {
 		t.Fatalf("Watch failed: %v", err)
 	}
-	testCheckResult(t, watch.Added, w, newOut)
+	testCheckResult(t, w, watch.Event{Type: watch.Added, Object: newOut})
 
 	// Make sure we can't watch from older resource versions anymoer and get a "Gone" error.
 	tooOldWatcher, err := store.Watch(ctx, key, storage.ListOptions{ResourceVersion: out.ResourceVersion, Predicate: storage.Everything})
@@ -279,12 +279,11 @@ func RunTestWatchFromZero(ctx context.Context, t *testing.T, store storage.Inter
 		Code:   http.StatusInternalServerError,
 		Reason: metav1.StatusReasonInternalError,
 	}
-	testCheckResultFunc(t, tooOldWatcher, func(actualEventType watch.EventType, actualObject runtime.Object) error {
-		ExpectNoDiff(t, "incorrect event type", watch.Error, actualEventType)
-		if !apiequality.Semantic.DeepDerivative(&expiredError, actualObject) && !apiequality.Semantic.DeepDerivative(&internalError, actualObject) {
-			t.Errorf("expected: %#v; got %#v", &expiredError, actualObject)
+	testCheckResultFunc(t, tooOldWatcher, func(actualEvent watch.Event) {
+		assertObjectsAreEqual(t, "incorrect event type", watch.Error, actualEvent.Type)
+		if !apiequality.Semantic.DeepDerivative(&expiredError, actualEvent.Object) && !apiequality.Semantic.DeepDerivative(&internalError, actualEvent.Object) {
+			t.Errorf("expected: %#v; got %#v", &expiredError, actualEvent.Object)
 		}
-		return nil
 	})
 }
 
@@ -314,7 +313,7 @@ func RunTestWatchFromNonZero(ctx context.Context, t *testing.T, store storage.In
 			newObj.Annotations = map[string]string{"version": "2"}
 			return newObj, nil
 		}), nil)
-	testCheckResult(t, watch.Modified, w, out)
+	testCheckResult(t, w, watch.Event{Type: watch.Modified, Object: out})
 }
 
 func RunTestDelayedWatchDelivery(ctx context.Context, t *testing.T, store storage.Interface) {
@@ -480,7 +479,7 @@ func RunTestWatcherTimeout(ctx context.Context, t *testing.T, store storage.Inte
 		if err := store.Create(ctx, computePodKey(pod), pod, out, 0); err != nil {
 			t.Fatalf("Create failed: %v", err)
 		}
-		testCheckResult(t, watch.Added, readingWatcher, out)
+		testCheckResult(t, readingWatcher, watch.Event{Type: watch.Added, Object: out})
 	}
 	if time.Since(startTime) > time.Duration(250*nonReadingWatchers)*time.Millisecond {
 		t.Errorf("waiting for events took too long: %v", time.Since(startTime))
@@ -507,7 +506,7 @@ func RunTestWatchDeleteEventObjectHaveLatestRV(ctx context.Context, t *testing.T
 		t.Fatalf("ResourceVersion didn't changed on deletion: %s", deletedObj.ResourceVersion)
 	}
 
-	testCheckResult(t, watch.Deleted, w, deletedObj)
+	testCheckResult(t, w, watch.Event{Type: watch.Deleted, Object: deletedObj})
 }
 
 func RunTestWatchInitializationSignal(ctx context.Context, t *testing.T, store storage.Interface) {
@@ -550,25 +549,24 @@ func RunOptionalTestProgressNotify(ctx context.Context, t *testing.T, store stor
 
 	// when we send a bookmark event, the client expects the event to contain an
 	// object of the correct type, but with no fields set other than the resourceVersion
-	testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
-		ExpectNoDiff(t, "incorrect event type", watch.Bookmark, actualEventType)
+	testCheckResultFunc(t, w, func(actualEvent watch.Event) {
+		assertObjectsAreEqual(t, "incorrect event type", watch.Bookmark, actualEvent.Type)
 		// first, check that we have the correct resource version
-		obj, ok := actualObject.(metav1.Object)
+		obj, ok := actualEvent.Object.(metav1.Object)
 		if !ok {
-			return fmt.Errorf("got %T, not metav1.Object", actualObject)
+			t.Fatalf("got %T, not metav1.Object", actualEvent.Object)
 		}
 		if err := validateResourceVersion(obj.GetResourceVersion()); err != nil {
-			return err
+			t.Fatal(err)
 		}
 
 		// then, check that we have the right type and content
-		pod, ok := actualObject.(*example.Pod)
+		pod, ok := actualEvent.Object.(*example.Pod)
 		if !ok {
-			return fmt.Errorf("got %T, not *example.Pod", actualObject)
+			t.Fatalf("got %T, not *example.Pod", actualEvent.Object)
 		}
 		pod.ResourceVersion = ""
-		ExpectNoDiff(t, "bookmark event should contain an object with no fields set other than resourceVersion", &example.Pod{}, pod)
-		return nil
+		assertObjectsAreEqual(t, "bookmark event should contain an object with no fields set other than resourceVersion", &example.Pod{}, pod)
 	})
 }
 
@@ -717,7 +715,7 @@ func RunTestClusterScopedWatch(ctx context.Context, t *testing.T, store storage.
 					currentObjs[watchTest.obj.Name] = out
 				}
 				if watchTest.expectEvent {
-					testCheckResult(t, watchTest.watchType, w, expectObj)
+					testCheckResult(t, w, watch.Event{Type: watchTest.watchType, Object: expectObj})
 				}
 			}
 			w.Stop()
@@ -1032,7 +1030,7 @@ func RunTestNamespaceScopedWatch(ctx context.Context, t *testing.T, store storag
 					currentObjs[podIdentifier] = out
 				}
 				if watchTest.expectEvent {
-					testCheckResult(t, watchTest.watchType, w, expectObj)
+					testCheckResult(t, w, watch.Event{Type: watchTest.watchType, Object: expectObj})
 				}
 			}
 			w.Stop()
