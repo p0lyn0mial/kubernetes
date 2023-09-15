@@ -101,7 +101,7 @@ func testPropagateStore(ctx context.Context, t *testing.T, store storage.Interfa
 	return key, setOutput
 }
 
-func assertObjectsAreEqual(t *testing.T, msg string, expected, got interface{}) {
+func requireObjectsEqual(t *testing.T, msg string, expected, got interface{}) {
 	t.Helper()
 	equal, diff := areObjectEqual(expected, got)
 	if !equal {
@@ -160,14 +160,14 @@ func testCheckEventType(t *testing.T, expectEventType watch.EventType, w watch.I
 
 func testCheckResult(t *testing.T, w watch.Interface, expectEvent watch.Event) {
 	testCheckResultFunc(t, w, func(actualEvent watch.Event) {
-		assertObjectsAreEqual(t, "incorrect event", expectEvent, actualEvent)
+		requireObjectsEqual(t, "incorrect event", expectEvent, actualEvent)
 	})
 }
 
 func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
 	for _, expectedEvent := range expectedEvents {
 		testCheckResultFunc(t, w, func(actualEvent watch.Event) {
-			assertObjectsAreEqual(t, "incorrect event", expectedEvent, actualEvent)
+			requireObjectsEqual(t, "incorrect event", expectedEvent, actualEvent)
 		})
 	}
 }
