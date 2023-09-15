@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/apis/example"
 	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
 	"k8s.io/apiserver/pkg/features"
@@ -327,6 +328,13 @@ func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
 	storagetesting.RunSendInitialEventsBackwardCompatibility(ctx, t, store)
 }
 
+func TestCacherWatchSemanticsNew(t *testing.T) {
+	testSetupWithFakedStorageWrapper := func(t *testing.T) (storage.Interface, func(storageRV string), func()) {
+		return testSetupWithFakedStorage(t)
+	}
+	storagetesting.RunWatchSemantics(context.TODO(), t, testSetupWithFakedStorageWrapper)
+}
+
 // ===================================================
 // Test-setup related function are following.
 // ===================================================
@@ -423,4 +431,88 @@ func testSetupWithEtcdServer(t *testing.T, opts ...setupOption) (context.Context
 	}
 
 	return ctx, cacher, server, terminate
+}
+
+func testSetupWithFakedStorage(t *testing.T, opts ...setupOption) (storage.Interface, func(storageRV string), func()) {
+	var storageResourceVersion string
+	var fakeStorage *dummyStorage
+	var watcher *watch.FakeWatcher
+	var cacher *Cacher
+	var err error
+
+	setupOpts := setupOptions{}
+	opts = append([]setupOption{withDefaults}, opts...)
+	for _, opt := range opts {
+		opt(&setupOpts)
+	}
+
+	storageRVSetter := func(storageRV string) {
+		// doesn't have to be thread safe
+		storageResourceVersion = storageRV
+	}
+
+	fakeStorage = &dummyStorage{}
+	fakeStorage.getListFn = func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error {
+		podList := listObj.(*example.PodList)
+		podList.ListMeta = metav1.ListMeta{ResourceVersion: storageResourceVersion}
+		return nil
+	}
+	createCounter := 1
+	addedPods := []*example.Pod{}
+	fakeStorage.createFn = func(_ context.Context, _ string, obj, _ runtime.Object, _ uint64) error {
+		// since we are using a dummy storage
+		// simulate progress on the RV on each addition
+		createCounter++
+		pod := obj.(*example.Pod)
+		pod.ResourceVersion = fmt.Sprintf("%d", createCounter)
+
+		// collect all pods added so far for
+		// a potential watch request
+		addedPods = append(addedPods, pod)
+		return cacher.watchCache.Add(pod)
+	}
+
+	config := Config{
+		Storage:        fakeStorage,
+		Versioner:      storage.APIObjectVersioner{},
+		GroupResource:  schema.GroupResource{Resource: "pods"},
+		ResourcePrefix: setupOpts.resourcePrefix,
+		KeyFunc:        setupOpts.keyFunc,
+		GetAttrsFunc:   GetPodAttrs,
+		NewFunc:        newPod,
+		NewListFunc:    newPodList,
+		IndexerFuncs:   setupOpts.indexerFuncs,
+		Codec:          codecs.LegacyCodec(examplev1.SchemeGroupVersion),
+		Clock:          setupOpts.clock,
+	}
+	cacher, err = NewCacherFromConfig(config)
+	if err != nil {
+		t.Fatalf("Failed to initialize cacher: %v", err)
+	}
+	if err = cacher.ready.wait(context.TODO()); err != nil {
+		t.Fatalf("unexpected error waiting for the cache to be ready")
+	}
+
+	// wire a watcher for tests that go through the underlying store
+	// it hasn't been wired earlier because it would be picked up
+	// by the internal reflector
+	fakeStorage.watchFn = func(_ context.Context, _ string, _ storage.ListOptions) (watch.Interface, error) {
+		if watcher != nil {
+			return nil, fmt.Errorf("watcher already initialized, a double initialzation wasn't implemented")
+		}
+		watcher = watch.NewFakeWithChanSize(10, false)
+		for _, pod := range addedPods {
+			watcher.Add(pod)
+		}
+		return watcher, nil
+	}
+
+	terminate := func() {
+		cacher.Stop()
+		if watcher != nil {
+			watcher.Stop()
+		}
+	}
+
+	return cacher, storageRVSetter, terminate
 }
