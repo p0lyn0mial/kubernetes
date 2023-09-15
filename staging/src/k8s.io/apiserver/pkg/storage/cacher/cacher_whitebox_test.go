@@ -84,6 +84,7 @@ type dummyStorage struct {
 	err       error
 	getListFn func(_ context.Context, _ string, _ storage.ListOptions, listObj runtime.Object) error
 	watchFn   func(_ context.Context, _ string, _ storage.ListOptions) (watch.Interface, error)
+	createFn  func(_ context.Context, _ string, _, _ runtime.Object, _ uint64) error
 }
 
 func (d *dummyStorage) RequestWatchProgress(ctx context.Context) error {
@@ -109,7 +110,10 @@ func newDummyWatch() watch.Interface {
 }
 
 func (d *dummyStorage) Versioner() storage.Versioner { return nil }
-func (d *dummyStorage) Create(_ context.Context, _ string, _, _ runtime.Object, _ uint64) error {
+func (d *dummyStorage) Create(ctx context.Context, key string, obj, out runtime.Object, ttl uint64) error {
+	if d.createFn != nil {
+		return d.createFn(ctx, key, obj, out, ttl)
+	}
 	return fmt.Errorf("unimplemented")
 }
 func (d *dummyStorage) Delete(_ context.Context, _ string, _ runtime.Object, _ *storage.Preconditions, _ storage.ValidateObjectFunc, _ runtime.Object) error {
