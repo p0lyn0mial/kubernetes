@@ -101,11 +101,11 @@ func testPropagateStore(ctx context.Context, t *testing.T, store storage.Interfa
 	return key, setOutput
 }
 
-func ExpectNoDiff(t *testing.T, msg string, expected, got interface{}) {
+func assertObjectsAreEqual(t *testing.T, msg string, expected, got interface{}) {
 	t.Helper()
 	equal, diff := areObjectEqual(expected, got)
 	if !equal {
-		t.Errorf("%s: %s", msg, diff)
+		t.Fatalf("%s: %s", msg, diff)
 	}
 }
 
@@ -158,20 +158,16 @@ func testCheckEventType(t *testing.T, expectEventType watch.EventType, w watch.I
 	}
 }
 
-func testCheckResult(t *testing.T, expectEventType watch.EventType, w watch.Interface, expectObj runtime.Object) {
-	testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
-		ExpectNoDiff(t, "incorrect event type", expectEventType, actualEventType)
-		ExpectNoDiff(t, "incorrect object", expectObj, actualObject)
-		return nil
+func testCheckResult(t *testing.T, w watch.Interface, expectEvent watch.Event) {
+	testCheckResultFunc(t, w, func(actualEvent watch.Event) {
+		assertObjectsAreEqual(t, "incorrect event", expectEvent, actualEvent)
 	})
 }
 
 func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
 	for _, expectedEvent := range expectedEvents {
-		testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
-			ExpectNoDiff(t, "incorrect event type", expectedEvent.Type, actualEventType)
-			ExpectNoDiff(t, "incorrect object", expectedEvent.Object, actualObject)
-			return nil
+		testCheckResultFunc(t, w, func(actualEvent watch.Event) {
+			assertObjectsAreEqual(t, "incorrect event", expectedEvent, actualEvent)
 		})
 	}
 }
@@ -179,29 +175,18 @@ func testCheckResultsInStrictOrder(t *testing.T, w watch.Interface, expectedEven
 func testCheckResultsInRandomOrder(t *testing.T, w watch.Interface, expectedEvents []watch.Event) {
 	_, file, line, _ := goruntime.Caller(1)
 	for _, _ = range expectedEvents {
-		var lastReceivedEventType watch.EventType
-		var lastReceivedObject runtime.Object
-		found := false
-		testCheckResultFunc(t, w, func(actualEventType watch.EventType, actualObject runtime.Object) error {
-			lastReceivedEventType = actualEventType
-			lastReceivedObject = actualObject
-			for _, e := range expectedEvents {
-				equal, _ := areObjectEqual(e.Type, actualEventType)
-				if !equal {
-					continue
-				}
-				equal, _ = areObjectEqual(e.Object, actualObject)
-				if equal {
-					found = true
-					break
-				}
-			}
-			return nil
+		testCheckResultFunc(t, w, func(actualEvent watch.Event) {
+			ExpectContains(t, fmt.Sprintf("(called from %v:%v), recevied unexpected event", file, line), toInterfaceSlice(expectedEvents), actualEvent)
 		})
-		if !found {
-			t.Fatalf("(called from %v:%v), recevied unexpected type: %v, and object: %#v", file, line, lastReceivedEventType, lastReceivedObject)
-		}
 	}
+}
+
+func toInterfaceSlice[T any](s []T) []interface{} {
+	result := make([]interface{}, len(s))
+	for i, v := range s {
+		result[i] = v
+	}
+	return result
 }
 
 func testCheckNoMoreResults(t *testing.T, w watch.Interface) {
@@ -213,16 +198,14 @@ func testCheckNoMoreResults(t *testing.T, w watch.Interface) {
 	}
 }
 
-func testCheckResultFunc(t *testing.T, w watch.Interface, check func(actualEventType watch.EventType, actualObject runtime.Object) error) {
+func testCheckResultFunc(t *testing.T, w watch.Interface, check func(actualEvent watch.Event)) {
 	select {
 	case res := <-w.ResultChan():
 		obj := res.Object
 		if co, ok := obj.(runtime.CacheableObject); ok {
-			obj = co.GetObject()
+			res.Object = co.GetObject()
 		}
-		if err := check(res.Type, obj); err != nil {
-			t.Error(err)
-		}
+		check(res)
 	case <-time.After(wait.ForeverTestTimeout):
 		t.Errorf("time out after waiting %v on ResultChan", wait.ForeverTestTimeout)
 	}
