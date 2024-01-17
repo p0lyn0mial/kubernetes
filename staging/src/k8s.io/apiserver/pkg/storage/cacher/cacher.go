@@ -571,6 +571,12 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 		return newErrWatcher(err), nil
 	}
 
+	// Determine the ResourceVersion to which the watch cache must be synchronized
+	watchCacheResourceVersion, err := c.getWatchCacheResourceVersion(ctx, requestedWatchRV, opts, resourceVersionGuard.getCurrentResourceVersionFromStorageOnce)
+	if err != nil {
+		return newErrWatcher(err), nil
+	}
+
 	// Determine watch timeout('0' means deadline is not set, ignore checking)
 	deadline, _ := ctx.Deadline()
 
@@ -598,7 +604,7 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 	// moreover even though the c.waitUntilWatchCacheFreshAndForceAllEvents acquires a lock
 	// it is safe to release the lock after the method finishes because we don't require
 	// any atomicity between the call to the method and further calls that actually get the events.
-	forceAllEvents, err := c.waitUntilWatchCacheFreshAndForceAllEvents(ctx, requestedWatchRV, opts)
+	forceAllEvents, err := c.waitUntilWatchCacheFreshAndForceAllEvents(ctx, watchCacheResourceVersion, opts)
 	if err != nil {
 		return newErrWatcher(err), nil
 	}
@@ -1293,12 +1299,34 @@ func (c *Cacher) getCommonResourceVersionLockedFunc(ctx context.Context, parsedW
 	}
 }
 
+// getWatchCacheResourceVersion returns a ResourceVersion to which the watch cache must be synchronized to
+//
+// Depending on the input parameters, the semantics of the returned ResourceVersion are:
+//   - must be at Exact RV (when parsedWatchResourceVersion > 0)
+//   - can be at Any RV (when parsedWatchResourceVersion = 0)
+//   - must be at Most Recent RV (return an RV from etcd)
+func (c *Cacher) getWatchCacheResourceVersion(ctx context.Context, parsedWatchResourceVersion uint64, opts storage.ListOptions, getCurrentResourceVersionFromStorageOnce func(ctx context.Context) (uint64, error)) (uint64, error) {
+	if opts.SendInitialEvents == nil || !*opts.SendInitialEvents || !opts.Predicate.AllowWatchBookmarks || len(opts.ResourceVersion) != 0 {
+		return parsedWatchResourceVersion, nil
+	}
+	// TODO(p0lyn0mial): maybe this function should be considered only when
+	//      requesting progress notification from etcd is supported
+	return getCurrentResourceVersionFromStorageOnce(ctx)
+}
+
 // waitUntilWatchCacheFreshAndForceAllEvents waits until cache is at least
 // as fresh as given requestedWatchRV if sendInitialEvents was requested.
 // Additionally, it instructs the caller whether it should ask for
 // all events from the cache (full state) or not.
 func (c *Cacher) waitUntilWatchCacheFreshAndForceAllEvents(ctx context.Context, requestedWatchRV uint64, opts storage.ListOptions) (bool, error) {
 	if opts.SendInitialEvents != nil && *opts.SendInitialEvents {
+		// TODO(p0lyn0mial): request progress notification from etcd when the cache is not fresh and supported
+		//
+		// TODO(p0lyn0mial): retry for RV = 0 | unset cases ?
+		//     the default timeout is 3s, usually the etcd flag is set to 5s
+		//     or modify the waitUntilFreshAndBlock function to accept a timeout param (max 5s ?!)
+		//
+		// TODO(p0lyn0mial): add a metric to track the number of times we have failed while waiting
 		err := c.watchCache.waitUntilFreshAndBlock(ctx, requestedWatchRV)
 		defer c.watchCache.RUnlock()
 		return err == nil, err
