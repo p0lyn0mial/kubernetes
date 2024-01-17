@@ -557,14 +557,18 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 	//   watchers on our watcher having a processing hiccup
 	chanSize := c.watchCache.suggestedWatchChannelSize(c.indexedTrigger != nil, triggerSupported)
 
+	getCurrentStorageResourceVersion := func(ctx context.Context) (uint64, error) {
+		return storage.GetCurrentResourceVersionFromStorage(ctx, c.storage, c.newListFunc, c.resourcePrefix, c.objectType.String())
+	}
+
 	// Determine a function that computes the bookmarkAfterResourceVersion
-	bookmarkAfterResourceVersionFn, err := c.getBookmarkAfterResourceVersionLockedFunc(ctx, requestedWatchRV, opts)
+	bookmarkAfterResourceVersionFn, err := c.getBookmarkAfterResourceVersionLockedFunc(ctx, requestedWatchRV, opts, getCurrentStorageResourceVersion)
 	if err != nil {
 		return newErrWatcher(err), nil
 	}
 
 	// Determine a function that computes the watchRV we should start from
-	startWatchResourceVersionFn, err := c.getStartResourceVersionForWatchLockedFunc(ctx, requestedWatchRV, opts)
+	startWatchResourceVersionFn, err := c.getStartResourceVersionForWatchLockedFunc(ctx, requestedWatchRV, opts, getCurrentStorageResourceVersion)
 	if err != nil {
 		return newErrWatcher(err), nil
 	}
@@ -1249,11 +1253,11 @@ func (c *Cacher) LastSyncResourceVersion() (uint64, error) {
 // spits a ResourceVersion after which the bookmark event will be delivered.
 //
 // The returned function must be called under the watchCache lock.
-func (c *Cacher) getBookmarkAfterResourceVersionLockedFunc(ctx context.Context, parsedResourceVersion uint64, opts storage.ListOptions) (func() uint64, error) {
+func (c *Cacher) getBookmarkAfterResourceVersionLockedFunc(ctx context.Context, parsedResourceVersion uint64, opts storage.ListOptions, getCurrentStorageResourceVersion func(ctx context.Context) (uint64, error)) (func() uint64, error) {
 	if opts.SendInitialEvents == nil || !*opts.SendInitialEvents || !opts.Predicate.AllowWatchBookmarks {
 		return func() uint64 { return 0 }, nil
 	}
-	return c.getCommonResourceVersionLockedFunc(ctx, parsedResourceVersion, opts)
+	return c.getCommonResourceVersionLockedFunc(ctx, parsedResourceVersion, opts, getCurrentStorageResourceVersion)
 }
 
 // getStartResourceVersionForWatchLockedFunc returns a function that
@@ -1264,21 +1268,21 @@ func (c *Cacher) getBookmarkAfterResourceVersionLockedFunc(ctx context.Context, 
 //   - start at Any (return the current watchCache's RV)
 //
 // The returned function must be called under the watchCache lock.
-func (c *Cacher) getStartResourceVersionForWatchLockedFunc(ctx context.Context, parsedWatchResourceVersion uint64, opts storage.ListOptions) (func() uint64, error) {
+func (c *Cacher) getStartResourceVersionForWatchLockedFunc(ctx context.Context, parsedWatchResourceVersion uint64, opts storage.ListOptions, getCurrentStorageResourceVersion func(ctx context.Context) (uint64, error)) (func() uint64, error) {
 	if opts.SendInitialEvents == nil || *opts.SendInitialEvents {
 		return func() uint64 { return parsedWatchResourceVersion }, nil
 	}
-	return c.getCommonResourceVersionLockedFunc(ctx, parsedWatchResourceVersion, opts)
+	return c.getCommonResourceVersionLockedFunc(ctx, parsedWatchResourceVersion, opts, getCurrentStorageResourceVersion)
 }
 
 // getCommonResourceVersionLockedFunc a helper that simply computes a ResourceVersion
 // based on the input parameters. Please examine callers of this method to get more context.
 //
 // The returned function must be called under the watchCache lock.
-func (c *Cacher) getCommonResourceVersionLockedFunc(ctx context.Context, parsedWatchResourceVersion uint64, opts storage.ListOptions) (func() uint64, error) {
+func (c *Cacher) getCommonResourceVersionLockedFunc(ctx context.Context, parsedWatchResourceVersion uint64, opts storage.ListOptions, getCurrentStorageResourceVersion func(ctx context.Context) (uint64, error)) (func() uint64, error) {
 	switch {
 	case len(opts.ResourceVersion) == 0:
-		rv, err := storage.GetCurrentResourceVersionFromStorage(ctx, c.storage, c.newListFunc, c.resourcePrefix, c.objectType.String())
+		rv, err := getCurrentStorageResourceVersion(ctx)
 		if err != nil {
 			return nil, err
 		}
