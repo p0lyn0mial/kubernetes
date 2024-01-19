@@ -1320,50 +1320,54 @@ func TestControllerManagerAliases(t *testing.T) {
 }
 
 func TestWatchListClientFlagUsage(t *testing.T) {
-	assertWatchListClientFeatureDefaultValue(t)
-
 	fs := pflag.NewFlagSet("addflagstest", pflag.ContinueOnError)
 	s, _ := NewKubeControllerManagerOptions()
 	for _, f := range s.Flags([]string{""}, []string{""}, nil).FlagSets {
 		fs.AddFlagSet(f)
 	}
 
+	assertWatchListClientFeatureDefaultValue(t)
+	assertWatchListCommandLineDefaultValue(t, fs)
+}
+
+func TestWatchListClientFlagChange(t *testing.T) {
+	fs := pflag.NewFlagSet("addflagstest", pflag.ContinueOnError)
+	s, _ := NewKubeControllerManagerOptions()
+	for _, f := range s.Flags([]string{""}, []string{""}, nil).FlagSets {
+		fs.AddFlagSet(f)
+	}
+
+	assertWatchListClientFeatureDefaultValue(t)
+	assertWatchListCommandLineDefaultValue(t, fs)
+
+	args := []string{fmt.Sprintf("--feature-gates=%v=false", clientgofeaturegate.WatchListClient)}
+	if err := fs.Parse(args); err != nil {
+		t.Fatal(err)
+	}
+
+	watchListClientValue := clientgofeaturegate.FeatureGates().Enabled(clientgofeaturegate.WatchListClient)
+	if watchListClientValue {
+		t.Fatalf("expected %q feature gate to be disabled after setting the command line flag", clientgofeaturegate.WatchListClient)
+	}
+}
+
+func assertWatchListClientFeatureDefaultValue(t *testing.T) {
+	watchListClientDefaultValue := clientgofeaturegate.FeatureGates().Enabled(clientgofeaturegate.WatchListClient)
+	if !watchListClientDefaultValue {
+		t.Fatalf("expected %q feature gate to be enabled for KCM", clientgofeaturegate.WatchListClient)
+	}
+}
+
+func assertWatchListCommandLineDefaultValue(t *testing.T, fs *pflag.FlagSet) {
 	fgFlagName := "feature-gates"
 	fg := fs.Lookup(fgFlagName)
 	if fg == nil {
 		t.Fatalf("didn't find %q flag", fgFlagName)
 	}
 
-	expectedWatchListClientString := "WatchListClient=true|false (BETA - default=false)"
+	expectedWatchListClientString := "WatchListClient=true|false (BETA - default=true)"
 	if !strings.Contains(fg.Usage, expectedWatchListClientString) {
 		t.Fatalf("%q flag doesn't contain the expected usage for %v feature gate.\nExpected = %v\nUsage = %v", fgFlagName, clientgofeaturegate.WatchListClient, expectedWatchListClientString, fg.Usage)
-	}
-}
-
-func TestWatchListClientFlagChange(t *testing.T) {
-	assertWatchListClientFeatureDefaultValue(t)
-
-	fs := pflag.NewFlagSet("addflagstest", pflag.ContinueOnError)
-	s, _ := NewKubeControllerManagerOptions()
-	for _, f := range s.Flags([]string{""}, []string{""}, nil).FlagSets {
-		fs.AddFlagSet(f)
-	}
-
-	args := []string{fmt.Sprintf("--feature-gates=%v=true", clientgofeaturegate.WatchListClient)}
-	if err := fs.Parse(args); err != nil {
-		t.Fatal(err)
-	}
-
-	watchListClientValue := clientgofeaturegate.FeatureGates().Enabled(clientgofeaturegate.WatchListClient)
-	if !watchListClientValue {
-		t.Fatalf("expected %q feature gate to be enabled after setting the command line flag", clientgofeaturegate.WatchListClient)
-	}
-}
-
-func assertWatchListClientFeatureDefaultValue(t *testing.T) {
-	watchListClientDefaultValue := clientgofeaturegate.FeatureGates().Enabled(clientgofeaturegate.WatchListClient)
-	if watchListClientDefaultValue {
-		t.Fatalf("expected %q feature gate to be disabled for KCM", clientgofeaturegate.WatchListClient)
 	}
 }
 
