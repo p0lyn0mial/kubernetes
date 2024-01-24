@@ -557,18 +557,16 @@ func (c *Cacher) Watch(ctx context.Context, key string, opts storage.ListOptions
 	//   watchers on our watcher having a processing hiccup
 	chanSize := c.watchCache.suggestedWatchChannelSize(c.indexedTrigger != nil, triggerSupported)
 
-	getCurrentStorageResourceVersion := func(ctx context.Context) (uint64, error) {
-		return storage.GetCurrentResourceVersionFromStorage(ctx, c.storage, c.newListFunc, c.resourcePrefix, c.objectType.String())
-	}
+	resourceVersionGuard := newStorageResourceVersionGuard(c.storage, c.newListFunc, c.resourcePrefix, c.objectType.String())
 
 	// Determine a function that computes the bookmarkAfterResourceVersion
-	bookmarkAfterResourceVersionFn, err := c.getBookmarkAfterResourceVersionLockedFunc(ctx, requestedWatchRV, opts, getCurrentStorageResourceVersion)
+	bookmarkAfterResourceVersionFn, err := c.getBookmarkAfterResourceVersionLockedFunc(ctx, requestedWatchRV, opts, resourceVersionGuard.getCurrentResourceVersionFromStorageOnce)
 	if err != nil {
 		return newErrWatcher(err), nil
 	}
 
 	// Determine a function that computes the watchRV we should start from
-	startWatchResourceVersionFn, err := c.getStartResourceVersionForWatchLockedFunc(ctx, requestedWatchRV, opts, getCurrentStorageResourceVersion)
+	startWatchResourceVersionFn, err := c.getStartResourceVersionForWatchLockedFunc(ctx, requestedWatchRV, opts, resourceVersionGuard.getCurrentResourceVersionFromStorageOnce)
 	if err != nil {
 		return newErrWatcher(err), nil
 	}
