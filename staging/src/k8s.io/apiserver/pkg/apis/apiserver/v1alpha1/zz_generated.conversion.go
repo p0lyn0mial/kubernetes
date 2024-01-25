@@ -402,6 +402,7 @@ func autoConvert_v1alpha1_Issuer_To_apiserver_Issuer(in *Issuer, out *apiserver.
 	out.URL = in.URL
 	out.CertificateAuthority = in.CertificateAuthority
 	out.Audiences = *(*[]string)(unsafe.Pointer(&in.Audiences))
+	out.AudienceMatchPolicy = apiserver.AudienceMatchPolicyType(in.AudienceMatchPolicy)
 	return nil
 }
 
@@ -414,6 +415,7 @@ func autoConvert_apiserver_Issuer_To_v1alpha1_Issuer(in *apiserver.Issuer, out *
 	out.URL = in.URL
 	out.CertificateAuthority = in.CertificateAuthority
 	out.Audiences = *(*[]string)(unsafe.Pointer(&in.Audiences))
+	out.AudienceMatchPolicy = AudienceMatchPolicyType(in.AudienceMatchPolicy)
 	return nil
 }
 
