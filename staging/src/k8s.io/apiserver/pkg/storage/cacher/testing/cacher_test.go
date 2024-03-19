@@ -34,12 +34,15 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/apis/example"
 	examplev1 "k8s.io/apiserver/pkg/apis/example/v1"
+	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage"
 	"k8s.io/apiserver/pkg/storage/cacher"
 	"k8s.io/apiserver/pkg/storage/etcd3"
 	etcd3testing "k8s.io/apiserver/pkg/storage/etcd3/testing"
 	storagetesting "k8s.io/apiserver/pkg/storage/testing"
 	"k8s.io/apiserver/pkg/storage/value/encrypt/identity"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/utils/clock"
 )
 
@@ -285,9 +288,18 @@ func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
 
 func TestWatchSemantics(t *testing.T) {
 	ctx := context.TODO()
-	store, terminate := testSetupWithEtcdAndCreateWrapper(ctx, t)
-	t.Cleanup(terminate)
-	storagetesting.RunWatchSemantics(ctx, t, store)
+	t.Run("WatchFromStorageWithoutResourceVersion=true", func(t *testing.T) {
+		defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchFromStorageWithoutResourceVersion, true)()
+		store, terminate := testSetupWithEtcdAndCreateWrapper(ctx, t)
+		t.Cleanup(terminate)
+		storagetesting.RunWatchSemantics(context.TODO(), t, store)
+	})
+	t.Run("WatchFromStorageWithoutResourceVersion=false", func(t *testing.T) {
+		defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.WatchFromStorageWithoutResourceVersion, false)()
+		store, terminate := testSetupWithEtcdAndCreateWrapper(ctx, t)
+		t.Cleanup(terminate)
+		storagetesting.RunWatchSemantics(context.TODO(), t, store)
+	})
 }
 
 func TestWatchSemanticInitialEventsExtended(t *testing.T) {
