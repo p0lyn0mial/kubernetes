@@ -106,7 +106,7 @@ func AddObjectMetaFieldsSet(source fields.Set, objectMeta *metav1.ObjectMeta, ha
 }
 
 func testSetup(t *testing.T, opts ...setupOption) (context.Context, *cacher.Cacher, tearDownFunc) {
-	ctx, cacher, _, tearDown := testSetupWithEtcdServer(t, opts...)
+	ctx, cacher, _, _, tearDown := testSetupWithEtcdServer(t, opts...)
 	return ctx, cacher, tearDown
 }
 
