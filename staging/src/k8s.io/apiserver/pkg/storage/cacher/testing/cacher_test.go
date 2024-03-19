@@ -54,6 +54,12 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
+	ctx, store, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunSendInitialEventsBackwardCompatibility(ctx, t, store)
+}
+
 func TestWatchSemantics(t *testing.T) {
 	ctx := context.TODO()
 	store, terminate := testSetupWithEtcdAndCreateWrapper(ctx, t)
@@ -97,6 +103,11 @@ func AddObjectMetaFieldsSet(source fields.Set, objectMeta *metav1.ObjectMeta, ha
 		source["metadata.namespace"] = objectMeta.Namespace
 	}
 	return source
+}
+
+func testSetup(t *testing.T, opts ...setupOption) (context.Context, *cacher.Cacher, tearDownFunc) {
+	ctx, cacher, _, tearDown := testSetupWithEtcdServer(t, opts...)
+	return ctx, cacher, tearDown
 }
 
 func testSetupWithEtcdAndCreateWrapper(ctx context.Context, t *testing.T, opts ...setupOption) (storage.Interface, tearDownFunc) {
