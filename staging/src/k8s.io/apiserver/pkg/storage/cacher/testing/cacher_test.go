@@ -54,6 +54,12 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestWatchInitializationSignal(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestWatchInitializationSignal(ctx, t, cacher)
+}
+
 func TestClusterScopedWatch(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t, withClusterScopedKeyFunc, withSpecNodeNameIndexerFuncs)
 	t.Cleanup(terminate)
