@@ -54,6 +54,14 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestWatchError(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
+func TestWatchContextCancel(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
 func TestWatcherTimeout(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
