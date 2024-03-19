@@ -54,6 +54,12 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestWatchBookmarksWithCorrectResourceVersion(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestOptionalWatchBookmarksWithCorrectResourceVersion(ctx, t, cacher)
+}
+
 func TestSendInitialEventsBackwardCompatibility(t *testing.T) {
 	ctx, store, terminate := testSetup(t)
 	t.Cleanup(terminate)
