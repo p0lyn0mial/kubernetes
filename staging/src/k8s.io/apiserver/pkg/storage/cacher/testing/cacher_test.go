@@ -54,6 +54,90 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestCreate(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestCreate(ctx, t, cacher, checkStorageInvariants)
+}
+
+func TestCreateWithTTL(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestCreateWithTTL(ctx, t, cacher)
+}
+
+func TestCreateWithKeyExist(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestCreateWithKeyExist(ctx, t, cacher)
+}
+
+func TestGet(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestGet(ctx, t, cacher)
+}
+
+func TestUnconditionalDelete(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestUnconditionalDelete(ctx, t, cacher)
+}
+
+func TestConditionalDelete(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestConditionalDelete(ctx, t, cacher)
+}
+
+func TestDeleteWithSuggestion(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDeleteWithSuggestion(ctx, t, cacher)
+}
+
+func TestDeleteWithSuggestionAndConflict(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDeleteWithSuggestionAndConflict(ctx, t, cacher)
+}
+
+func TestDeleteWithSuggestionOfDeletedObject(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDeleteWithSuggestionOfDeletedObject(ctx, t, cacher)
+}
+
+func TestValidateDeletionWithSuggestion(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestValidateDeletionWithSuggestion(ctx, t, cacher)
+}
+
+func TestValidateDeletionWithOnlySuggestionValid(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestValidateDeletionWithOnlySuggestionValid(ctx, t, cacher)
+}
+
+func TestDeleteWithConflict(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDeleteWithConflict(ctx, t, cacher)
+}
+
+func TestPreconditionalDeleteWithSuggestion(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestPreconditionalDeleteWithSuggestion(ctx, t, cacher)
+}
+
+func TestPreconditionalDeleteWithSuggestionPass(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestPreconditionalDeleteWithOnlySuggestionPass(ctx, t, cacher)
+}
+
 func TestListContinuation(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
@@ -359,6 +443,10 @@ func withSpecNodeNameIndexerFuncs(options *setupOptions) {
 
 func checkStorageCalls(t *testing.T, pageSize, estimatedProcessedObjects uint64) {
 	// No-op function for now, since cacher passes pagination calls to underlying storage.
+}
+
+func checkStorageInvariants(ctx context.Context, t *testing.T, key string) {
+	// No-op function since cacher simply passes object creation to the underlying storage.
 }
 
 type createWrapper struct {
