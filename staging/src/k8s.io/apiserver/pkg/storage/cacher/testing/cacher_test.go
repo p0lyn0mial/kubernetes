@@ -54,6 +54,12 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestNamespaceScopedWatch(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t, withSpecNodeNameIndexerFuncs)
+	t.Cleanup(terminate)
+	storagetesting.RunTestNamespaceScopedWatch(ctx, t, cacher)
+}
+
 func TestWatchDispatchBookmarkEvents(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
@@ -210,6 +216,18 @@ func withDefaults(options *setupOptions) {
 	options.resourcePrefix = prefix
 	options.keyFunc = func(obj runtime.Object) (string, error) { return storage.NamespaceKeyFunc(prefix, obj) }
 	options.clock = clock.RealClock{}
+}
+
+func withSpecNodeNameIndexerFuncs(options *setupOptions) {
+	options.indexerFuncs = map[string]storage.IndexerFunc{
+		"spec.nodeName": func(obj runtime.Object) string {
+			pod, ok := obj.(*example.Pod)
+			if !ok {
+				return ""
+			}
+			return pod.Spec.NodeName
+		},
+	}
 }
 
 type createWrapper struct {
