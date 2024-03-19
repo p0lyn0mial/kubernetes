@@ -61,6 +61,12 @@ func TestWatchSemantics(t *testing.T) {
 	storagetesting.RunWatchSemantics(ctx, t, store)
 }
 
+func TestWatchSemanticInitialEventsExtended(t *testing.T) {
+	store, terminate := testSetupWithEtcdAndCreateWrapper(t)
+	t.Cleanup(terminate)
+	storagetesting.RunWatchSemanticInitialEventsExtended(context.TODO(), t, store)
+}
+
 // GetPodAttrs returns labels and fields of a given object for filtering purposes.
 func GetPodAttrs(obj runtime.Object) (labels.Set, fields.Set, error) {
 	pod, ok := obj.(*example.Pod)
