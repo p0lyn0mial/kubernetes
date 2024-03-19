@@ -54,6 +54,27 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestListInconsistentContinuation(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	// TODO(#109831): Enable use of this by setting compaction.
+	storagetesting.RunTestListInconsistentContinuation(ctx, t, cacher, nil)
+}
+
+func TestConsistentList(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
+func TestGuaranteedUpdate(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
+func TestGuaranteedUpdateWithTTL(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestGuaranteedUpdateWithTTL(ctx, t, cacher)
+}
+
 func TestGuaranteedUpdateChecksStoredData(t *testing.T) {
 	// TODO(#109831): Enable use of this test and run it.
 }
