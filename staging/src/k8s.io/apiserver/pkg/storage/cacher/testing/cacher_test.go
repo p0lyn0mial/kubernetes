@@ -54,6 +54,24 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestListContinuation(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestListContinuation(ctx, t, cacher, checkStorageCalls)
+}
+
+func TestListPaginationRareObject(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestListPaginationRareObject(ctx, t, cacher, checkStorageCalls)
+}
+
+func TestListContinuationWithFilter(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestListContinuationWithFilter(ctx, t, cacher, checkStorageCalls)
+}
+
 func TestListInconsistentContinuation(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
@@ -337,6 +355,10 @@ func withSpecNodeNameIndexerFuncs(options *setupOptions) {
 			return pod.Spec.NodeName
 		},
 	}
+}
+
+func checkStorageCalls(t *testing.T, pageSize, estimatedProcessedObjects uint64) {
+	// No-op function for now, since cacher passes pagination calls to underlying storage.
 }
 
 type createWrapper struct {
