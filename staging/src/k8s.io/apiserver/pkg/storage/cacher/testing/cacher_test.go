@@ -54,6 +54,24 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestDeleteTriggerWatch(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDeleteTriggerWatch(ctx, t, cacher)
+}
+
+func TestWatchFromNonZero(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestWatchFromNonZero(ctx, t, cacher)
+}
+
+func TestDelayedWatchDelivery(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestDelayedWatchDelivery(ctx, t, cacher)
+}
+
 func TestWatchError(t *testing.T) {
 	// TODO(#109831): Enable use of this test and run it.
 }
