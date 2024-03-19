@@ -54,6 +54,38 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestGuaranteedUpdateChecksStoredData(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
+func TestGuaranteedUpdateWithConflict(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestGuaranteedUpdateWithConflict(ctx, t, cacher)
+}
+
+func TestGuaranteedUpdateWithSuggestionAndConflict(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestGuaranteedUpdateWithSuggestionAndConflict(ctx, t, cacher)
+}
+
+func TestTransformationFailure(t *testing.T) {
+	// TODO(#109831): Enable use of this test and run it.
+}
+
+func TestCount(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestCount(ctx, t, cacher)
+}
+
+func TestWatch(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t)
+	t.Cleanup(terminate)
+	storagetesting.RunTestWatch(ctx, t, cacher)
+}
+
 func TestDeleteTriggerWatch(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t)
 	t.Cleanup(terminate)
