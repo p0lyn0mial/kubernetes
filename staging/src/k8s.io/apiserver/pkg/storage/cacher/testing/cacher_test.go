@@ -54,6 +54,12 @@ func init() {
 	utilruntime.Must(examplev1.AddToScheme(scheme))
 }
 
+func TestClusterScopedWatch(t *testing.T) {
+	ctx, cacher, terminate := testSetup(t, withClusterScopedKeyFunc, withSpecNodeNameIndexerFuncs)
+	t.Cleanup(terminate)
+	storagetesting.RunTestClusterScopedWatch(ctx, t, cacher)
+}
+
 func TestNamespaceScopedWatch(t *testing.T) {
 	ctx, cacher, terminate := testSetup(t, withSpecNodeNameIndexerFuncs)
 	t.Cleanup(terminate)
@@ -216,6 +222,12 @@ func withDefaults(options *setupOptions) {
 	options.resourcePrefix = prefix
 	options.keyFunc = func(obj runtime.Object) (string, error) { return storage.NamespaceKeyFunc(prefix, obj) }
 	options.clock = clock.RealClock{}
+}
+
+func withClusterScopedKeyFunc(options *setupOptions) {
+	options.keyFunc = func(obj runtime.Object) (string, error) {
+		return storage.NoNamespaceKeyFunc(options.resourcePrefix, obj)
+	}
 }
 
 func withSpecNodeNameIndexerFuncs(options *setupOptions) {
