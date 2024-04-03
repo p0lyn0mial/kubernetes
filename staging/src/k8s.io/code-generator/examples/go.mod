@@ -57,3 +57,5 @@ replace (
 )
 
 replace github.com/onsi/ginkgo/v2 => github.com/openshift/onsi-ginkgo/v2 v2.6.1-0.20230811135323-13a5964cc98e
+
+replace golang.org/x/net => github.com/openshift-priv/golang-net v0.0.0-20240328074913-6c33ef4f7dac
