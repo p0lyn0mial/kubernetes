@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,8 +32,11 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/features"
@@ -72,6 +76,7 @@ type watcher struct {
 	client              *clientv3.Client
 	codec               runtime.Codec
 	newFunc             func() runtime.Object
+	newListFunc         func() runtime.Object
 	objectType          string
 	groupResource       schema.GroupResource
 	versioner           storage.Versioner
@@ -92,6 +97,7 @@ type watchChan struct {
 	incomingEventChan chan *event
 	resultChan        chan watch.Event
 	errChan           chan error
+	newListFunc       func() runtime.Object
 }
 
 // Watch watches on a key and returns a watch.Interface that transfers relevant notifications.
@@ -112,7 +118,7 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 	if err != nil {
 		return nil, err
 	}
-	wc := w.createWatchChan(ctx, key, startWatchRV, opts.Recursive, opts.ProgressNotify, opts.Predicate)
+	wc := w.createWatchChan(ctx, w.newListFunc, key, startWatchRV, opts.Recursive, opts.ProgressNotify, opts.Predicate)
 	go wc.run(isInitialEventsEndBookmarkRequired(opts), areInitialEventsRequired(rev, opts))
 
 	// For etcd watch we don't have an easy way to answer whether the watch
@@ -125,7 +131,7 @@ func (w *watcher) Watch(ctx context.Context, key string, rev int64, opts storage
 	return wc, nil
 }
 
-func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, recursive, progressNotify bool, pred storage.SelectionPredicate) *watchChan {
+func (w *watcher) createWatchChan(ctx context.Context, newListFunc func() runtime.Object, key string, rev int64, recursive, progressNotify bool, pred storage.SelectionPredicate) *watchChan {
 	wc := &watchChan{
 		watcher:           w,
 		key:               key,
@@ -136,6 +142,7 @@ func (w *watcher) createWatchChan(ctx context.Context, key string, rev int64, re
 		incomingEventChan: make(chan *event, incomingBufSize),
 		resultChan:        make(chan watch.Event, outgoingBufSize),
 		errChan:           make(chan error, 1),
+		newListFunc:       newListFunc,
 	}
 	if pred.Empty() {
 		// The filter doesn't filter out any object.
@@ -581,6 +588,21 @@ func (wc *watchChan) transform(e *event) (res *watch.Event) {
 				wc.sendError(fmt.Errorf("error while accessing object's metadata gr: %v, type: %v, obj: %#v, err: %v", wc.watcher.groupResource, wc.watcher.objectType, object, err))
 				return nil
 			}
+
+			listObject := wc.newListFunc()
+			listPtr, err := meta.GetItemsPtr(listObject)
+			if err != nil {
+				utilruntime.HandleError(err)
+			}
+			listVal, err := conversion.EnforcePtr(listPtr)
+			if err != nil {
+				utilruntime.HandleError(err)
+			}
+			listVal.Set(reflect.MakeSlice(listVal.Type(), 1, 1))
+			listVal.Index(0).Set(reflect.ValueOf(object).Elem())
+			// TODO: set RV for the list ?
+
+			object = listObject
 		}
 		res = &watch.Event{
 			Type:   watch.Bookmark,
