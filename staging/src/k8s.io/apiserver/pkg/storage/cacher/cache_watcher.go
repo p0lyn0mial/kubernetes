@@ -19,9 +19,12 @@ package cacher
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/conversion"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -83,6 +86,9 @@ type cacheWatcher struct {
 	// stateMutex protects state
 	stateMutex sync.Mutex
 
+	//
+	newListFunc func() runtime.Object
+
 	// state holds a numeric value indicating the current state of the watcher
 	state int
 }
@@ -91,6 +97,7 @@ func newCacheWatcher(
 	chanSize int,
 	filter filterWithAttrsFunc,
 	forget func(bool),
+	newListFunc func() runtime.Object,
 	versioner storage.Versioner,
 	deadline time.Time,
 	allowWatchBookmarks bool,
@@ -104,6 +111,7 @@ func newCacheWatcher(
 		filter:              filter,
 		stopped:             false,
 		forget:              forget,
+		newListFunc:         newListFunc,
 		versioner:           versioner,
 		deadline:            deadline,
 		allowWatchBookmarks: allowWatchBookmarks,
@@ -367,6 +375,20 @@ func (c *cacheWatcher) convertToWatchEvent(event *watchCacheEvent) *watch.Event 
 				utilruntime.HandleError(fmt.Errorf("error while accessing object's metadata gr: %v, identifier: %v, obj: %#v, err: %v", c.groupResource, c.identifier, e.Object, err))
 				return nil
 			}
+			listObject := c.newListFunc()
+			listPtr, err := meta.GetItemsPtr(listObject)
+			if err != nil {
+				utilruntime.HandleError(err)
+			}
+			listVal, err := conversion.EnforcePtr(listPtr)
+			if err != nil {
+				utilruntime.HandleError(err)
+			}
+			listVal.Set(reflect.MakeSlice(listVal.Type(), 1, 1))
+			listVal.Index(0).Set(reflect.ValueOf(e.Object).Elem())
+			// TODO: set RV for the list ?
+
+			e.Object = listObject
 		}
 		return e
 	}
