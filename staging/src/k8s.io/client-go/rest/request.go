@@ -786,6 +786,8 @@ type WatchListResult struct {
 
 	// gvk represents the API version and kind of the assembled list object
 	gvk schema.GroupVersionKind
+
+	clientContentConfig ClientContentConfig
 }
 
 func (r WatchListResult) Into(obj runtime.Object) error {
@@ -805,9 +807,40 @@ func (r WatchListResult) Into(obj runtime.Object) error {
 		return fmt.Errorf("need a pointer to slice, got %v", listVal.Kind())
 	}
 
+	listMeta, err := meta.ListAccessor(obj)
+	if err != nil {
+		return err
+	}
+	listMeta.SetResourceVersion(r.initialEventsEndBookmarkRV)
+	obj.GetObjectKind().SetGroupVersionKind(r.gvk)
+
 	if len(r.items) == 0 {
 		listVal.Set(reflect.MakeSlice(listVal.Type(), 0, 0))
-	} else {
+	}
+
+	// round trip encode/decode to satisfy the decoder ?
+	{
+		// the encoder remove apiVersion info for some reason
+		encoder, err := r.clientContentConfig.Negotiator.Encoder(r.clientContentConfig.ContentType, nil)
+		if err != nil {
+			return err
+		}
+		encodedObject, err := runtime.Encode(encoder, obj)
+		if err != nil {
+			return err
+		}
+
+		decoder, err := r.clientContentConfig.Negotiator.Decoder(r.clientContentConfig.ContentType, nil)
+		if err != nil {
+			return err
+		}
+		obj, _, err = decoder.Decode(encodedObject, &r.gvk, nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	if len(r.items) > 0 {
 		listVal.Set(reflect.MakeSlice(listVal.Type(), len(r.items), len(r.items)))
 		for i, o := range r.items {
 			if listVal.Type().Elem() != reflect.TypeOf(o).Elem() {
@@ -816,14 +849,6 @@ func (r WatchListResult) Into(obj runtime.Object) error {
 			listVal.Index(i).Set(reflect.ValueOf(o).Elem())
 		}
 	}
-
-	listMeta, err := meta.ListAccessor(obj)
-	if err != nil {
-		return err
-	}
-	listMeta.SetResourceVersion(r.initialEventsEndBookmarkRV)
-	obj.GetObjectKind().SetGroupVersionKind(r.gvk)
-	// round trip encode/decode to satisfy the decoder ?
 
 	return nil
 }
@@ -894,6 +919,7 @@ func (r *Request) handleWatchList(ctx context.Context, w watch.Interface) WatchL
 						items:                      items,
 						initialEventsEndBookmarkRV: meta.GetResourceVersion(),
 						gvk:                        gv.WithKind(annotations[metav1.ListKindEventAnnotationKey]),
+						clientContentConfig:        r.c.content,
 					}
 				}
 			default:

@@ -19,6 +19,7 @@ package rest
 import (
 	"context"
 	"fmt"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"regexp"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestWatchListResult(t *testing.T) {
 		{
 			name:   "gv is applied",
 			result: &v1.PodList{},
-			target: WatchListResult{gv: schema.GroupVersion{Group: "g", Version: "v"}},
+			target: WatchListResult{gvk: schema.GroupVersionKind{Group: "g", Version: "v", Kind: "PodList"}},
 			expectedResult: &v1.PodList{
 				TypeMeta: metav1.TypeMeta{Kind: "PodList", APIVersion: "g/v"},
 				Items:    []v1.Pod{},
@@ -85,7 +86,7 @@ func TestWatchListResult(t *testing.T) {
 		{
 			name:   "gv is applied, empty group",
 			result: &v1.PodList{},
-			target: WatchListResult{gv: schema.GroupVersion{Version: "v"}},
+			target: WatchListResult{gvk: schema.GroupVersionKind{Version: "v", Kind: "PodList"}},
 			expectedResult: &v1.PodList{
 				TypeMeta: metav1.TypeMeta{Kind: "PodList", APIVersion: "v"},
 				Items:    []v1.Pod{},
@@ -119,6 +120,7 @@ func TestWatchListResult(t *testing.T) {
 	}
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
+			scenario.target.clientContentConfig.Negotiator = runtime.NewClientNegotiator(legacyscheme.Codecs.WithoutConversion(), schema.GroupVersion{})
 			err := scenario.target.Into(scenario.result)
 			if scenario.expectedErr != nil && err == nil {
 				t.Fatalf("expected an error = %v, got nil", scenario.expectedErr)
@@ -206,6 +208,7 @@ func TestWatchListSuccess(t *testing.T) {
 				c: &RESTClient{
 					content: ClientContentConfig{
 						GroupVersion: scenario.gv,
+						Negotiator:   runtime.NewClientNegotiator(legacyscheme.Codecs.WithoutConversion(), scenario.gv),
 					},
 				},
 			}
