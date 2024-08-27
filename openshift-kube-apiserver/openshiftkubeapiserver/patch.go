@@ -24,6 +24,7 @@ import (
 	"k8s.io/apiserver/pkg/admission"
 	"k8s.io/apiserver/pkg/quota/v1/generic"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/apiserver/pkg/server/healthz"
 	clientgoinformers "k8s.io/client-go/informers"
 	corev1informers "k8s.io/client-go/informers/core/v1"
 	"k8s.io/client-go/rest"
@@ -111,6 +112,8 @@ func OpenShiftKubeAPIServerConfigPatch(genericConfig *genericapiserver.Config, k
 	openshiftAPIServiceReachabilityCheck := newOpenshiftAPIServiceReachabilityCheck(genericConfig.PublicAddress)
 	oauthAPIServiceReachabilityCheck := newOAuthPIServiceReachabilityCheck(genericConfig.PublicAddress)
 	genericConfig.ReadyzChecks = append(genericConfig.ReadyzChecks, openshiftAPIServiceReachabilityCheck, oauthAPIServiceReachabilityCheck)
+
+	removeEtcdFromLivezChecks(genericConfig)
 
 	genericConfig.AddPostStartHookOrDie("openshift.io-startkubeinformers", func(context genericapiserver.PostStartHookContext) error {
 		go openshiftInformers.Start(context.StopCh)
@@ -214,4 +217,18 @@ func (i *kubeAPIServerInformers) Start(stopCh <-chan struct{}) {
 
 func newClusterQuotaMappingController(nsInternalInformer corev1informers.NamespaceInformer, clusterQuotaInformer quotav1informer.ClusterResourceQuotaInformer) *clusterquotamapping.ClusterQuotaMappingController {
 	return clusterquotamapping.NewClusterQuotaMappingController(nsInternalInformer, clusterQuotaInformer)
+}
+
+// removeEtcdFromLivezChecks deletes the etcd health check from the LivezChecks
+// the motivation for removal is the belief that a broken connection
+// to the etcd cluster will not be fixed by simply deleting the KAS pod.
+func removeEtcdFromLivezChecks(genericConfig *genericapiserver.Config) {
+	checks := []healthz.HealthChecker{}
+	for _, check := range genericConfig.LivezChecks {
+		if check.Name() == "etcd" {
+			continue
+		}
+		checks = append(checks, check)
+	}
+	genericConfig.LivezChecks = checks
 }
