@@ -251,11 +251,10 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 				return
 			}
 
-			var listGVK schema.GroupVersionKind
-			if servedList, err := scope.Convertor.ConvertToVersion(r.NewList(), scope.Kind.GroupVersion()); err != nil {
+			servedList, err := scope.Convertor.ConvertToVersion(r.NewList(), scope.Kind.GroupVersion())
+			if err != nil {
 				scope.err(errors.NewInternalError(err), w, req)
-			} else {
-				listGVK = servedList.GetObjectKind().GroupVersionKind()
+				return
 			}
 
 			// TODO: Currently we explicitly ignore ?timeout= and use only ?timeoutSeconds=.
@@ -274,7 +273,7 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 				scope.err(err, w, req)
 				return
 			}
-			handler, err := serveWatchHandler(watcher, scope, outputMediaType, req, w, timeout, metrics.CleanListScope(ctx, &opts), listGVK)
+			handler, err := serveWatchHandler(watcher, scope, outputMediaType, req, w, timeout, metrics.CleanListScope(ctx, &opts), servedList)
 			if err != nil {
 				scope.err(err, w, req)
 				return

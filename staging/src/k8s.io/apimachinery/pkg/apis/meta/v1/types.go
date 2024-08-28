@@ -443,6 +443,7 @@ const (
 	// TODO: consider names
 	ListKindEventAnnotationKey    = "kubernetes.io/list-kind"
 	ListVersionEventAnnotationKey = "kubernetes.io/list-version"
+	ListEventAnnotationKey        = "kubernetes.io/list"
 )
 
 // resourceVersionMatch specifies how the resourceVersion parameter is applied. resourceVersionMatch

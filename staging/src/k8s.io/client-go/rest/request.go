@@ -19,6 +19,7 @@ package rest
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -128,6 +129,8 @@ type Request struct {
 	bodyBytes []byte
 
 	retryFn requestRetryFunc
+
+	watchObjectDecoder runtime.Decoder
 }
 
 // NewRequest creates a new request helper object for accessing runtime.Objects on a server.
@@ -786,6 +789,10 @@ type WatchListResult struct {
 
 	// gvk represents the API version and kind of the assembled list object
 	gvk schema.GroupVersionKind
+
+	decoder runtime.Decoder
+
+	rawList []byte
 }
 
 func (r WatchListResult) Into(obj runtime.Object) error {
@@ -793,16 +800,26 @@ func (r WatchListResult) Into(obj runtime.Object) error {
 		return r.err
 	}
 
-	listPtr, err := meta.GetItemsPtr(obj)
+	listItemsPtr, err := meta.GetItemsPtr(obj)
 	if err != nil {
 		return err
 	}
-	listVal, err := conversion.EnforcePtr(listPtr)
+	listVal, err := conversion.EnforcePtr(listItemsPtr)
 	if err != nil {
 		return err
 	}
 	if listVal.Kind() != reflect.Slice {
 		return fmt.Errorf("need a pointer to slice, got %v", listVal.Kind())
+	}
+
+	decodedList, _, err := r.decoder.Decode(r.rawList, nil, nil)
+	if err != nil {
+		return err
+	}
+	listPointer := reflect.ValueOf(obj).Elem()
+	decodedListPointer := reflect.ValueOf(decodedList).Elem()
+	if listPointer.CanSet() && listPointer.Type() == decodedListPointer.Type() {
+		listPointer.Set(decodedListPointer)
 	}
 
 	if len(r.items) == 0 {
@@ -822,10 +839,13 @@ func (r WatchListResult) Into(obj runtime.Object) error {
 		return err
 	}
 	listMeta.SetResourceVersion(r.initialEventsEndBookmarkRV)
-	obj.GetObjectKind().SetGroupVersionKind(r.gvk)
-	// round trip encode/decode to satisfy the decoder ?
 
 	return nil
+}
+
+func (r WatchListResult) WithCustomDecoder(d runtime.Decoder) WatchListResult {
+	r.decoder = d
+	return r
 }
 
 // WatchList establishes a stream to get a consistent snapshot of data
@@ -886,14 +906,16 @@ func (r *Request) handleWatchList(ctx context.Context, w watch.Interface) WatchL
 				lastKey = key
 			case watch.Bookmark:
 				if annotations := meta.GetAnnotations(); annotations[metav1.InitialEventsAnnotationKey] == "true" {
-					gv, err := schema.ParseGroupVersion(annotations[metav1.ListVersionEventAnnotationKey])
+					rawList, err := base64.StdEncoding.DecodeString(annotations[metav1.ListEventAnnotationKey])
 					if err != nil {
 						return WatchListResult{err: err}
 					}
+
 					return WatchListResult{
 						items:                      items,
 						initialEventsEndBookmarkRV: meta.GetResourceVersion(),
-						gvk:                        gv.WithKind(annotations[metav1.ListKindEventAnnotationKey]),
+						decoder:                    r.watchObjectDecoder,
+						rawList:                    rawList,
 					}
 				}
 			default:
@@ -913,6 +935,7 @@ func (r *Request) newStreamWatcher(resp *http.Response) (watch.Interface, error)
 	if err != nil {
 		return nil, err
 	}
+	r.watchObjectDecoder = objectDecoder
 
 	handleWarnings(resp.Header, r.warningHandler)
 

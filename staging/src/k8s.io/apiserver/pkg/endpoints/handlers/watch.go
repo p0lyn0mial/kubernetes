@@ -17,7 +17,9 @@ limitations under the License.
 package handlers
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/httpstream/wsstream"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/watch"
@@ -66,7 +67,7 @@ func (w *realTimeoutFactory) TimeoutCh() (<-chan time.Time, func() bool) {
 
 // serveWatchHandler returns a handle to serve a watch response.
 // TODO: the functionality in this method and in WatchServer.Serve is not cleanly decoupled.
-func serveWatchHandler(watcher watch.Interface, scope *RequestScope, mediaTypeOptions negotiation.MediaTypeOptions, req *http.Request, w http.ResponseWriter, timeout time.Duration, metricsScope string, listGVK schema.GroupVersionKind) (http.Handler, error) {
+func serveWatchHandler(watcher watch.Interface, scope *RequestScope, mediaTypeOptions negotiation.MediaTypeOptions, req *http.Request, w http.ResponseWriter, timeout time.Duration, metricsScope string, list runtime.Object) (http.Handler, error) {
 	options, err := optionsForTransform(mediaTypeOptions, req)
 	if err != nil {
 		return nil, err
@@ -137,7 +138,7 @@ func serveWatchHandler(watcher watch.Interface, scope *RequestScope, mediaTypeOp
 		serverShuttingDownCh = signals.ShuttingDown()
 	}
 
-	transformEvent := func(in watch.Event) watch.Event {
+	transformEvent := func(in watch.Event, objectEncoder runtime.Encoder) watch.Event {
 		if in.Type != watch.Bookmark {
 			return in
 		}
@@ -158,8 +159,17 @@ func serveWatchHandler(watcher watch.Interface, scope *RequestScope, mediaTypeOp
 		if annotations == nil {
 			annotations = make(map[string]string)
 		}
-		annotations[metav1.ListKindEventAnnotationKey] = listGVK.Kind
-		annotations[metav1.ListVersionEventAnnotationKey] = listGVK.GroupVersion().String()
+		var encodedList bytes.Buffer
+		if err := objectEncoder.Encode(list, &encodedList); err != nil {
+			return watch.Event{
+				Type: watch.Error,
+				Object: &metav1.Status{
+					Status:  metav1.StatusFailure,
+					Message: err.Error(),
+				},
+			}
+		}
+		annotations[metav1.ListEventAnnotationKey] = base64.StdEncoding.EncodeToString(encodedList.Bytes())
 		meta.SetAnnotations(annotations)
 		return in
 	}
@@ -208,7 +218,7 @@ type WatchServer struct {
 	MemoryAllocator      runtime.MemoryAllocator
 	TimeoutFactory       TimeoutFactory
 	ServerShuttingDownCh <-chan struct{}
-	EventTransformer     func(watch.Event) watch.Event
+	EventTransformer     func(watch.Event, runtime.Encoder) watch.Event
 
 	metricsScope string
 }
@@ -279,7 +289,7 @@ func (s *WatchServer) HandleHTTP(w http.ResponseWriter, req *http.Request) {
 
 			// poc: a client needs to know the correct list gvk in order to synthesize a
 			// list object from watch events
-			event = s.EventTransformer(event)
+			event = s.EventTransformer(event, watchEncoder.embeddedEncoder)
 
 			if err := watchEncoder.Encode(event); err != nil {
 				utilruntime.HandleError(err)
