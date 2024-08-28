@@ -16,8 +16,8 @@ import (
 	"k8s.io/kubernetes/test/e2e/framework"
 )
 
-func TestWatchList(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, featuregate.Feature(clientfeatures.WatchListClient), false)
+func TestDynamicWatchList(t *testing.T) {
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, featuregate.Feature(clientfeatures.WatchListClient), true)
 	kubeconfig := "/Users/lszaszki/.kube/config"
 
 	// Load the kubeconfig file
@@ -34,11 +34,14 @@ func TestWatchList(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	t.Log(len(secretList.Items))
+	t.Logf("secretList: %+v\n", secretList)
+	if len(secretList.Items) != 1 {
+		t.Errorf("%#v", secretList.Items)
+	}
 }
 
 func TestTypedWatchList(t *testing.T) {
-	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, featuregate.Feature(clientfeatures.WatchListClient), false)
+	featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, featuregate.Feature(clientfeatures.WatchListClient), true)
 	kubeconfig := "/Users/lszaszki/.kube/config"
 
 	// Load the kubeconfig file
@@ -51,9 +54,11 @@ func TestTypedWatchList(t *testing.T) {
 
 	ctx := context.Background()
 
-	secretList, err := client.CoreV1().Secrets("kube-namespace").List(ctx, metav1.ListOptions{})
+	secretList, err := client.CoreV1().Secrets("kube-system").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		panic(err)
 	}
-	t.Log(len(secretList.Items))
+	if len(secretList.Items) != 1 {
+		t.Errorf("%#v", secretList.Items)
+	}
 }
