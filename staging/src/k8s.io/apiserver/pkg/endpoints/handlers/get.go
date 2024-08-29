@@ -188,12 +188,6 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 
 		ctx = request.WithNamespace(ctx, namespace)
 
-		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, scope)
-		if err != nil {
-			scope.err(err, w, req)
-			return
-		}
-
 		opts := metainternalversion.ListOptions{}
 		if err := metainternalversionscheme.ParameterCodec.DecodeParameters(req.URL.Query(), scope.MetaGroupVersion, &opts); err != nil {
 			err = errors.NewBadRequest(err.Error())
@@ -207,6 +201,19 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 			scope.err(err, w, req)
 			return
 		}
+
+		var restrictions negotiation.EndpointRestrictions
+		restrictions = scope
+		if opts.SendInitialEvents != nil && *opts.SendInitialEvents == true {
+			klog.Infof("DBG: watchlist request adding endpoint restrictions")
+			restrictions = &watchListEndpointRestrictions{scope}
+		}
+		outputMediaType, _, err := negotiation.NegotiateOutputMediaType(req, scope.Serializer, restrictions)
+		if err != nil {
+			scope.err(err, w, req)
+			return
+		}
+		klog.Infof("DBG: negotated.Converter=%v", outputMediaType.Convert)
 
 		// transform fields
 		// TODO: DecodeParametersInto should do this.
@@ -313,4 +320,17 @@ func ListResource(r rest.Lister, rw rest.Watcher, scope *RequestScope, forceWatc
 		defer span.AddEvent("Writing http response done", attribute.Int("count", meta.LenList(result)))
 		transformResponseObject(ctx, scope, req, w, http.StatusOK, outputMediaType, result)
 	}
+}
+
+type watchListEndpointRestrictions struct {
+	negotiation.EndpointRestrictions
+}
+
+func (e *watchListEndpointRestrictions) AllowsMediaTypeTransform(mimeType, mimeSubType string, target *schema.GroupVersionKind) bool {
+	klog.Infof("DBG: asked about type=%v, subType=%v, target=%#v", mimeType, mimeSubType, target)
+	if target != nil && target.Kind == "Table" {
+		klog.Infof("DBG: not allowing type=%v, subType=%v, target=%v", mimeType, mimeSubType, target)
+		return false
+	}
+	return e.EndpointRestrictions.AllowsMediaTypeTransform(mimeType, mimeSubType, target)
 }
