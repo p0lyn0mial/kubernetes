@@ -116,7 +116,13 @@ func NewSimpleDynamicClientWithCustomListKinds(scheme *runtime.Scheme, gvrToList
 	cs.AddWatchReactor("*", func(action testing.Action) (handled bool, ret watch.Interface, err error) {
 		gvr := action.GetResource()
 		ns := action.GetNamespace()
-		watch, err := o.Watch(gvr, ns)
+		var gvk schema.GroupVersionKind
+		var opts metav1.ListOptions
+		if watchActcion, ok := action.(testing.WatchActionImpl); ok {
+			gvk = watchActcion.Kind
+			opts = watchActcion.ListOptions
+		}
+		watch, err := o.Watch(gvr, gvk, ns, opts)
 		if err != nil {
 			return false, nil, err
 		}
@@ -412,7 +418,7 @@ func (c *dynamicResourceClient) Watch(ctx context.Context, opts metav1.ListOptio
 
 	case len(c.namespace) > 0:
 		return c.client.Fake.
-			InvokesWatch(testing.NewWatchAction(c.resource, c.namespace, opts))
+			InvokesWatch(testing.NewWatchAction(c.resource, c.resource.GroupVersion().WithKind(c.listKind), c.namespace, opts))
 
 	}
 
