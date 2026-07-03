@@ -317,11 +317,22 @@ func handleList(ctx context.Context, r rest.Lister, scope *RequestScope, req *ht
 	defer span.End(500 * time.Millisecond)
 	req = req.WithContext(ctx)
 
+	listStart := time.Now()
 	result, err := r.List(ctx, &opts)
 	if err != nil {
 		return err
 	}
+	listDuration := time.Since(listStart)
+
+	serializeStart := time.Now()
 	transformResponseObject(ctx, scope, req, w, http.StatusOK, outputMediaType, result)
+	serializeDuration := time.Since(serializeStart)
+
+	totalDuration := listDuration + serializeDuration
+	if totalDuration > 1*time.Second {
+		acceptEncoding := req.Header.Get("Accept-Encoding")
+		klog.V(2).Infof("TRACE-LIST %s: total=%v list=%v (watch cache) serialize=%v (encode+compress+network) acceptEncoding=%s", req.URL.Path, totalDuration, listDuration, serializeDuration, acceptEncoding)
+	}
 	return nil
 }
 

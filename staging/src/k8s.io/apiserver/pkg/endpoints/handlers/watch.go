@@ -272,11 +272,12 @@ func (p *plainResponseWriter) Close() error {
 var _ watchStreamWriter = &perFlushGzipWriter{}
 
 type perFlushGzipWriter struct {
-	delegateRW    http.ResponseWriter
-	flusher       http.Flusher
-	gw            *gzip.Writer
-	counter       *byteCounter
+	delegateRW      http.ResponseWriter
+	flusher         http.Flusher
+	gw              *gzip.Writer
+	counter         *byteCounter
 	CompressedBytes int64
+	FlushCount      int
 }
 
 type byteCounter struct {
@@ -305,6 +306,7 @@ func (p *perFlushGzipWriter) Flush() error {
 	if p.gw == nil {
 		return nil
 	}
+	p.FlushCount++
 	if err := p.gw.Flush(); err != nil {
 		return err
 	}
@@ -352,6 +354,13 @@ func newWatchResponseWriter(delegateRW http.ResponseWriter, flusher http.Flusher
 func (w *watchResponseWriter) CompressedBytes() int64 {
 	if gw, ok := w.writer.(*perFlushGzipWriter); ok {
 		return gw.CompressedBytes
+	}
+	return 0
+}
+
+func (w *watchResponseWriter) GzipFlushCount() int {
+	if gw, ok := w.writer.(*perFlushGzipWriter); ok {
+		return gw.FlushCount
 	}
 	return 0
 }
@@ -511,7 +520,8 @@ func (s *WatchServer) HandleHTTP(w http.ResponseWriter, req *http.Request) {
 					otherTime := sendingEvents - totalEncodeTime - totalFlushTime
 					writtenMB := float64(watchEncoder.writtenBytes) / 1024 / 1024
 					compressedMB := float64(rw.CompressedBytes()) / 1024 / 1024
-					klog.V(2).Infof("TRACE-WATCHLIST %s: events=%d uncompressedMB=%.0f compressedMB=%.0f total=%v setup=%v (PnF+watch init) sending=%v (event loop) serialize=%v (%s) write=%v (to gzip/network) flush=%v (gzip finalize+network) other=%v (chan+overhead)", req.URL.Path, initEventCount, writtenMB, compressedMB, totalTime, setupTime, sendingEvents, watchEncoder.serializeTime, s.MediaType, watchEncoder.writeTime, totalFlushTime, otherTime)
+					flushCount := rw.GzipFlushCount()
+					klog.V(2).Infof("TRACE-WATCHLIST %s: events=%d uncompressedMB=%.0f compressedMB=%.0f flushes=%d total=%v setup=%v (PnF+watch init) sending=%v (event loop) serialize=%v (%s) write=%v (to gzip/network) flush=%v (gzip finalize+network) other=%v (chan+overhead)", req.URL.Path, initEventCount, writtenMB, compressedMB, flushCount, totalTime, setupTime, sendingEvents, watchEncoder.serializeTime, s.MediaType, watchEncoder.writeTime, totalFlushTime, otherTime)
 				}
 				// Record completion of initial listing phase for WatchList
 				receivedTimestamp, ok := apirequest.ReceivedTimestampFrom(req.Context())
