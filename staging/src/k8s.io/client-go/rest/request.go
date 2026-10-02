@@ -850,6 +850,8 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 
 	handleWarnings(ctx, resp.Header, r.warningHandler)
 
+	networkReader := &restclientwatch.TimingReadCloser{ReadCloser: resp.Body}
+	resp.Body = networkReader
 	logger := klog.FromContext(ctx)
 	readAhead := r.useWatchListReadAhead(mediaType, streamingSerializer)
 	if r.watchListReadAhead {
@@ -877,6 +879,9 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 		watchEventDecoder = &watchListTraceStream{Decoder: watchEventDecoder, body: bodyTrace, streaming: streamTrace}
 	}
 	decoder := r.newWatchDecoder(ctx, mediaType, streamingSerializer, watchEventDecoder, objectDecoder)
+	if !readAhead {
+		decoder = restclientwatch.NewDecoderWithNetworkTiming(watchEventDecoder, objectDecoder, networkReader)
+	}
 
 	return watch.NewStreamWatcherWithLogger(
 		logger,

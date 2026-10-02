@@ -42,6 +42,11 @@ type Decoder interface {
 	Close()
 }
 
+// NetworkTimingReporter optionally reports time spent reading from a watch stream.
+type NetworkTimingReporter interface {
+	NetworkTiming() time.Duration
+}
+
 // Reporter hides the details of how an error is turned into a runtime.Object for
 // reporting on a watch stream since this package may not import a higher level report.
 type Reporter interface {
@@ -115,12 +120,29 @@ func (sw *StreamWatcher) receive() {
 	defer utilruntime.HandleCrashWithLogger(sw.logger)
 	defer close(sw.result)
 	defer sw.Stop()
+	start := time.Now()
+	var decodeTime, sendTime time.Duration
+	var eventCount int
+	defer func() {
+		total := time.Since(start)
+		if total <= 10*time.Second || eventCount == 0 {
+			return
+		}
+		if reporter, ok := sw.source.(NetworkTimingReporter); ok {
+			readTime := reporter.NetworkTiming()
+			sw.logger.V(2).Info("TRACE-STREAMWATCHER", "events", eventCount, "total", total, "read", readTime, "decode", decodeTime-readTime, "send", sendTime, "other", total-decodeTime-sendTime)
+			return
+		}
+		sw.logger.V(2).Info("TRACE-STREAMWATCHER", "events", eventCount, "total", total, "decode", decodeTime, "send", sendTime, "other", total-decodeTime-sendTime)
+	}()
 	for {
 		var started time.Time
 		if sw.trace {
 			started = time.Now()
 		}
+		decodeStart := time.Now()
 		action, obj, err := sw.source.Decode()
+		decodeTime += time.Since(decodeStart)
 		if sw.trace && time.Since(started) >= 5*time.Second {
 			sw.logger.Info("WatchList StreamWatcher Decode completed", "duration", time.Since(started))
 		}
@@ -142,12 +164,16 @@ func (sw *StreamWatcher) receive() {
 			}
 			return
 		}
+		eventCount++
+		sendStart := time.Now()
 		if !sw.send(Event{
 			Type:   action,
 			Object: obj,
 		}) {
+			sendTime += time.Since(sendStart)
 			return
 		}
+		sendTime += time.Since(sendStart)
 	}
 }
 
