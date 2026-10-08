@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <testsuite name="ClusterLoaderV2" tests="0" failures="0" errors="0" time="498.018">
+      <testcase name="watchlist-profile-setup overall (./testing/list/watchlist-profile-setup.yaml)" classname="ClusterLoaderV2" time="498.017120291"></testcase>
+      <testcase name="watchlist-profile-setup: [step: 01] Create unscheduled Pods" classname="ClusterLoaderV2" time="498.009373584"></testcase>
+  </testsuite>

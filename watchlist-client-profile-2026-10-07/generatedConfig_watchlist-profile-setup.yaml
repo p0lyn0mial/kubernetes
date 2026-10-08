@@ -1,0 +1,45 @@
+name: watchlist-profile-setup
+dependencies: []
+automanagednamespaces: 0
+namespace:
+  number: 1
+  prefix: watchlist-profile-pods
+  deletestalenamespaces: false
+  deleteautomanagednamespaces: false
+  enableexistingnamespaces: false
+  deletenamespacetimeout: 600000000000
+steps:
+- phases:
+  - namespacerange:
+      min: 1
+      max: 1
+      basename: null
+    namespacelist: []
+    replicaspernamespace: 50000
+    tuningset: PodSetup
+    objectbundle:
+    - basename: watchlist-profile-pod
+      objecttemplatepath: pod.yaml
+      templatefillmap:
+        group: watchlist-profile-pod
+      listunknownobjectoptions: null
+  measurements: []
+  module:
+    path: ""
+    params: {}
+  name: Create unscheduled Pods
+tuningsets:
+- name: PodSetup
+  initialdelay: 0
+  qpsload: null
+  randomizedload: null
+  steppedload: null
+  timelimitedload: null
+  randomizedtimelimitedload: null
+  parallelismlimitedload:
+    parallelismlimit: 50
+  globalqpsload: null
+  poissonload: null
+chaosmonkey:
+  nodefailure: null
+  excludednodes: {}

@@ -1,0 +1,107 @@
+I1007 14:17:48.471021       1 mode_informer.go:79] pprof listening on 127.0.0.1:6060
+I1007 14:17:48.471061       1 mode_informer.go:82] The informer subcommand started with the following arguments:
+I1007 14:17:48.471085       1 mode_informer.go:84]   -add_dir_header=false (If true, adds the file directory to the header of the log messages)
+I1007 14:17:48.471091       1 mode_informer.go:84]   -alsologtostderr=false (log to standard error as well as files (no effect when -logtostderr=true))
+I1007 14:17:48.471095       1 mode_informer.go:84]   -alsologtostderrthreshold=0 (logs at or above this threshold go to stderr when -alsologtostderr=true (no effect when -logtostderr=true))
+I1007 14:17:48.471104       1 mode_informer.go:84]   -api-version=v1 (apiVersion of the target resource (e.g. v1, apps/v1).)
+I1007 14:17:48.471109       1 mode_informer.go:84]   -block-profile-rate=0 (Nanoseconds of blocking per sampled event; 0 disables block profiling)
+I1007 14:17:48.471111       1 mode_informer.go:84]   -content-type=proto (Content type for informer requests (required). Valid values: [json, proto])
+I1007 14:17:48.471112       1 mode_informer.go:84]   -count=1 (the number of informers per namespace to run.)
+I1007 14:17:48.471113       1 mode_informer.go:84]   -disableCompression=false (whether to disable gzip compression for API requests)
+I1007 14:17:48.471128       1 mode_informer.go:84]   -enableWatchListFeature=true (whether to set KUBE_FEATURE_WatchListClient env var)
+I1007 14:17:48.471132       1 mode_informer.go:84]   -kubeconfig= (path to kubeconfig.)
+I1007 14:17:48.471133       1 mode_informer.go:84]   -legacy_stderr_threshold_behavior=false (If true, stderrthreshold is ignored when logtostderr=true (legacy behavior). If false, stderrthreshold is honored even when logtostderr=true)
+I1007 14:17:48.471134       1 mode_informer.go:84]   -log_backtrace_at=:0 (when logging hits line file:N, emit a stack trace)
+I1007 14:17:48.471146       1 mode_informer.go:84]   -log_dir= (If non-empty, write log files in this directory (no effect when -logtostderr=true))
+I1007 14:17:48.471147       1 mode_informer.go:84]   -log_file= (If non-empty, use this log file (no effect when -logtostderr=true))
+I1007 14:17:48.471148       1 mode_informer.go:84]   -log_file_max_size=1800 (Defines the maximum size a log file can grow to (no effect when -logtostderr=true). Unit is megabytes. If the value is 0, the maximum file size is unlimited.)
+I1007 14:17:48.471155       1 mode_informer.go:84]   -logtostderr=true (log to standard error instead of files)
+I1007 14:17:48.471156       1 mode_informer.go:84]   -namespace= (namespace to run informers for. If empty will open on all namespaces.)
+I1007 14:17:48.471157       1 mode_informer.go:84]   -one_output=false (If true, only write logs to their native severity level (vs also writing to each lower severity level; no effect when -logtostderr=true))
+I1007 14:17:48.471158       1 mode_informer.go:84]   -profile-address=127.0.0.1:6060 (Listen address for Go pprof endpoints; disabled when empty (e.g. 127.0.0.1:6060))
+I1007 14:17:48.471159       1 mode_informer.go:84]   -resource=pods (resource name of the target resource (e.g. pods, deployments).)
+I1007 14:17:48.471160       1 mode_informer.go:84]   -skip_headers=false (If true, avoid header prefixes in the log messages)
+I1007 14:17:48.471161       1 mode_informer.go:84]   -skip_log_headers=false (If true, avoid headers when opening log files (no effect when -logtostderr=true))
+I1007 14:17:48.471162       1 mode_informer.go:84]   -stderrthreshold=0 (logs at or above this threshold go to stderr when writing to files and stderr (no effect when -logtostderr=true or -alsologtostderr=true unless -legacy_stderr_threshold_behavior=false))
+I1007 14:17:48.471181       1 mode_informer.go:84]   -v=0 (number for the log level verbosity)
+I1007 14:17:48.471186       1 mode_informer.go:84]   -vmodule= (comma-separated list of pattern=N settings for file-filtered logging)
+W1007 14:17:48.471199       1 client_config.go:683] Neither --kubeconfig nor --master was specified.  Using the inClusterConfig.  This might not work.
+I1007 14:17:48.471335       1 mode_informer.go:110] The following Kubernetes client config will be used
+&rest.Config{Host:"https://10.96.0.1:443", APIPath:"", ContentConfig:rest.ContentConfig{AcceptContentTypes:"application/vnd.kubernetes.protobuf", ContentType:"application/vnd.kubernetes.protobuf", GroupVersion:(*schema.GroupVersion)(nil), NegotiatedSerializer:runtime.NegotiatedSerializer(nil)}, Username:"", Password:"", BearerToken:"--- REDACTED ---", BearerTokenFile:"/var/run/secrets/kubernetes.io/serviceaccount/token", Impersonate:rest.ImpersonationConfig{UserName:"", UID:"", Groups:[]string(nil), Extra:map[string][]string(nil)}, AuthProvider:<nil>, AuthConfigPersister:rest.AuthProviderConfigPersister(nil), ExecProvider:<nil>, TLSClientConfig:rest.sanitizedTLSClientConfig{Insecure:false, ServerName:"", CertFile:"", KeyFile:"", CAFile:"/var/run/secrets/kubernetes.io/serviceaccount/ca.crt", CertData:[]uint8(nil), KeyData:[]uint8(nil), CAData:[]uint8(nil), NextProtos:[]string(nil)}, UserAgent:"", DisableCompression:false, Transport:http.RoundTripper(nil), WrapTransport:(transport.WrapperFunc)(nil), QPS:-1, Burst:0, RateLimiter:flowcontrol.RateLimiter(nil), WarningHandler:rest.WarningHandler(nil), WarningHandlerWithContext:rest.WarningHandlerWithContext(nil), Timeout:0, Dial:(func(context.Context, string, string) (net.Conn, error))(nil), Proxy:(func(*http.Request) (*url.URL, error))(nil)}
+I1007 14:17:48.471792       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:48.471843       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:49.874034       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.402227459s
+I1007 14:17:49.874090       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:49.874130       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:51.375124       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.501026959s
+I1007 14:17:51.375163       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:51.375205       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:52.976936       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.601751501s
+I1007 14:17:52.977033       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:52.977136       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:54.478094       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.501051876s
+I1007 14:17:54.478128       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:54.478181       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:55.978902       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.500761875s
+I1007 14:17:55.978950       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:55.979009       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:57.380178       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401218542s
+I1007 14:17:57.380216       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:57.380258       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:17:58.881882       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.501656709s
+I1007 14:17:58.881912       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:17:58.881951       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:00.285455       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.403536417s
+I1007 14:18:00.285487       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:00.285521       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:01.786057       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.500559709s
+I1007 14:18:01.786095       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:01.786137       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:03.187979       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401876251s
+I1007 14:18:03.188017       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:03.188061       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:04.589888       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401860209s
+I1007 14:18:04.589923       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:04.589964       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:05.990093       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.400155167s
+I1007 14:18:05.990139       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:05.990184       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:07.392116       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401945918s
+I1007 14:18:07.392170       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:07.392235       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:08.893106       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.500933834s
+I1007 14:18:08.893133       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:08.893171       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:10.294096       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.400952667s
+I1007 14:18:10.294128       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:10.294163       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:11.605969       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.311833543s
+I1007 14:18:11.606005       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:11.606093       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:13.207062       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.601045751s
+I1007 14:18:13.207110       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:13.207161       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:14.709462       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.502348167s
+I1007 14:18:14.709493       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:14.709524       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:16.109982       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.400477292s
+I1007 14:18:16.110026       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:16.110073       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:17.510255       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.400222542s
+I1007 14:18:17.510293       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:17.510368       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:18.912111       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401829583s
+I1007 14:18:18.912189       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:18.912302       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:20.314055       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401858501s
+I1007 14:18:20.314087       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:20.314124       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:21.716058       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.401958418s
+I1007 14:18:21.716098       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:21.716144       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:23.148982       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.432877084s
+I1007 14:18:23.149026       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:23.149069       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
+I1007 14:18:24.449945       1 mode_informer.go:148] All 1 informers for gvr = /v1, Resource=pods synced, time needed = 1.300903001s
+I1007 14:18:24.450001       1 mode_informer.go:138] Starting 1 informers for gvr = /v1, Resource=pods, targetNamespace = ""
+I1007 14:18:24.450045       1 mode_informer.go:144] Waiting for gvr = /v1, Resource=pods informers to sync
