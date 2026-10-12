@@ -27,6 +27,9 @@ die() { echo "error: $*" >&2; exit 1; }
 
 [[ -d "$perf_tests_dir/util-images/request-benchmark" ]] || die "missing perf-tests at $perf_tests_dir"
 [[ -d "$kubernetes_dir/staging/src/k8s.io/client-go" ]] || die "missing staged client-go"
+[[ -f "$perf_tests_dir/clusterloader2/testing/list/deployment.yaml" ]] || die "missing WatchList benchmark deployment template"
+rg -q -- '--enable-watch-list-read-ahead=' "$perf_tests_dir/clusterloader2/testing/list/deployment.yaml" || die "deployment template does not pass --enable-watch-list-read-ahead"
+rg -q -- '--watch-list-read-ahead-queue-length=' "$perf_tests_dir/clusterloader2/testing/list/deployment.yaml" || die "deployment template does not pass --watch-list-read-ahead-queue-length"
 command -v tar >/dev/null || die "tar is required"
 
 ssh "${ssh_opts[@]}" "$remote" "mkdir -p '$remote_root/perf-tests/util-images' '$remote_root/perf-tests/clusterloader2/testing/list' '$remote_root/kubernetes/staging/src/k8s.io'"
