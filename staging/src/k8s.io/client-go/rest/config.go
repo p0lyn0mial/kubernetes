@@ -102,6 +102,14 @@ type Config struct {
 	// server.
 	DisableCompression bool
 
+	// ExperimentalWatchListReadAhead enables buffered raw WatchList events.
+	// Disabled by default.
+	ExperimentalWatchListReadAhead bool
+
+	// ExperimentalWatchListReadAheadQueueLength controls the number of raw WatchList
+	// events buffered by the read-ahead decoder. A non-positive value uses the default.
+	ExperimentalWatchListReadAheadQueueLength int
+
 	// Transport may be used for custom HTTP behavior. This attribute may not
 	// be specified with the TLS client certificate options. Use WrapTransport
 	// to provide additional per-server middleware behavior.
@@ -397,6 +405,10 @@ func RESTClientForConfigAndClient(config *Config, httpClient *http.Client) (*RES
 	}
 
 	restClient, err := NewRESTClient(baseURL, versionedAPIPath, clientContent, rateLimiter, httpClient)
+	if restClient != nil {
+		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
+		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
+	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
 	return restClient, err
 }
@@ -479,6 +491,10 @@ func UnversionedRESTClientForConfigAndClient(config *Config, httpClient *http.Cl
 	}
 
 	restClient, err := NewRESTClient(baseURL, versionedAPIPath, clientContent, rateLimiter, httpClient)
+	if restClient != nil {
+		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
+		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
+	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
 	return restClient, err
 }
@@ -646,16 +662,18 @@ func AnonymousClientConfig(config *Config) *Config {
 			CAData:     config.TLSClientConfig.CAData,
 			NextProtos: config.TLSClientConfig.NextProtos,
 		},
-		RateLimiter:               config.RateLimiter,
-		WarningHandler:            config.WarningHandler,
-		WarningHandlerWithContext: config.WarningHandlerWithContext,
-		UserAgent:                 config.UserAgent,
-		DisableCompression:        config.DisableCompression,
-		QPS:                       config.QPS,
-		Burst:                     config.Burst,
-		Timeout:                   config.Timeout,
-		Dial:                      config.Dial,
-		Proxy:                     config.Proxy,
+		RateLimiter:                    config.RateLimiter,
+		WarningHandler:                 config.WarningHandler,
+		WarningHandlerWithContext:      config.WarningHandlerWithContext,
+		UserAgent:                      config.UserAgent,
+		DisableCompression:             config.DisableCompression,
+		ExperimentalWatchListReadAhead: config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
+		QPS:     config.QPS,
+		Burst:   config.Burst,
+		Timeout: config.Timeout,
+		Dial:    config.Dial,
+		Proxy:   config.Proxy,
 	}
 }
 
@@ -689,18 +707,20 @@ func CopyConfig(config *Config) *Config {
 			CAData:     config.TLSClientConfig.CAData,
 			NextProtos: config.TLSClientConfig.NextProtos,
 		},
-		UserAgent:                 config.UserAgent,
-		DisableCompression:        config.DisableCompression,
-		Transport:                 config.Transport,
-		WrapTransport:             config.WrapTransport,
-		QPS:                       config.QPS,
-		Burst:                     config.Burst,
-		RateLimiter:               config.RateLimiter,
-		WarningHandler:            config.WarningHandler,
-		WarningHandlerWithContext: config.WarningHandlerWithContext,
-		Timeout:                   config.Timeout,
-		Dial:                      config.Dial,
-		Proxy:                     config.Proxy,
+		UserAgent:                                 config.UserAgent,
+		DisableCompression:                        config.DisableCompression,
+		ExperimentalWatchListReadAhead:            config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
+		Transport:                                 config.Transport,
+		WrapTransport:                             config.WrapTransport,
+		QPS:                                       config.QPS,
+		Burst:                                     config.Burst,
+		RateLimiter:                               config.RateLimiter,
+		WarningHandler:                            config.WarningHandler,
+		WarningHandlerWithContext:                 config.WarningHandlerWithContext,
+		Timeout:                                   config.Timeout,
+		Dial:                                      config.Dial,
+		Proxy:                                     config.Proxy,
 	}
 	if config.ExecProvider != nil && config.ExecProvider.Config != nil {
 		c.ExecProvider.Config = config.ExecProvider.Config.DeepCopyObject()

@@ -1,8 +1,9 @@
 # WatchList envelope read-ahead: single-worker plan
 
-Status: proposed implementation, 2026-10-12. No performance improvement has
-been demonstrated for this design. This document narrows the first processor
-experiment to one object-decoding worker; a parallel worker pool is deferred.
+Status: experimental implementation, 2026-10-12. No end-to-end performance
+improvement has been demonstrated for this design. This document narrows the
+first processor experiment to one object-decoding worker; a parallel worker pool
+is deferred.
 
 ## Objective
 
@@ -35,8 +36,8 @@ At the time of inspection:
   a `metav1.WatchEvent`, then calls `runtime.Decode` on `got.Object.Raw`.
 - `apimachinery/pkg/watch/streamwatcher.go:StreamWatcher.receive` calls that
   decoder, then sends a fully decoded `watch.Event` to its result channel.
-- That result channel is currently buffered with `DefaultChanSize`, which is
-  100. It buffers decoded objects, not raw envelopes.
+- That result channel is unbuffered in this checkout. It carries decoded
+  objects, not raw envelopes.
 
 Record the revision and configuration used for each experiment. Older design
 documents describe an experimental byte receiver and an unbuffered result
@@ -83,13 +84,12 @@ existing `NewDecoder` and serial implementation as the default and control.
 An illustrative constructor is:
 
 ```go
-NewReadAheadDecoder(streamingDecoder, objectDecoder, options)
+NewReadAheadDecoder(streamingDecoder, objectDecoder)
 ```
 
-The concrete options and constructor signature are implementation details.
-Require positive event and payload limits when enabled; reject invalid options
-before starting a goroutine. Zero/disabled configuration selects the existing
-serial decoder at the call site.
+The concrete constructor signature is an implementation detail. The queue has
+a fixed capacity of two events in this experiment. Disabled configuration
+selects the existing serial decoder at the call site.
 
 Select the decoder in `Request.newStreamWatcher` after serializer negotiation.
 Initially enable only for explicit WatchList requests with `sendInitialEvents`
@@ -98,11 +98,9 @@ whole stream, including live events following the initial bookmark; do not add
 a midstream handover in version one.
 
 Use a clearly experimental opt-in configuration path. A production-facing
-option name is not settled by this document. The implementation must propagate
-both limits through client configuration and request construction and test that
-propagation. Do not reuse the earlier byte-ring budget name: these limits
-govern a different allocation domain. A resource-specific client can choose
-its limits without adding a global resource-to-budget registry.
+option name is not settled by this document. Propagate the enable/disable
+setting through client configuration and request construction and test that
+propagation. Buffer tuning remains a separate experiment.
 
 ## Queue entries and stage responsibilities
 
@@ -113,7 +111,6 @@ type rawEvent struct {
     eventType watch.EventType
     payload   []byte
     err       error
-    // Implementation also tracks any admission credit owned by this entry.
 }
 ```
 
@@ -123,14 +120,12 @@ sufficient.
 
 ### Envelope reader
 
-1. Acquire one event admission credit before reading the next envelope.
-2. Use the existing framer and streaming decoder with a fresh WatchEvent target.
-3. Preserve the existing check that the returned object is that target and
+1. Use the existing framer and streaming decoder with a fresh WatchEvent target.
+2. Preserve the existing check that the returned object is that target and
    validate the event type against Added, Modified, Deleted, Error, and Bookmark.
-4. Establish ownership of the embedded raw payload and calculate its charge.
-5. Acquire payload-byte credit, then enqueue the raw event using a cancellable
-   channel send. Transfer the credits with the entry.
-6. Repeat. On a terminal failure, enqueue it in order and stop producing; do
+3. Establish ownership of the embedded raw payload, then enqueue the event
+   using a cancellable channel send.
+4. Repeat. On a terminal failure, enqueue it in order and stop producing; do
    not discard preceding entries by immediately cancelling the pipeline.
 
 Only this goroutine accesses the framer and streaming decoder. It does not
@@ -139,10 +134,10 @@ typed-decode the embedded object or inspect bookmark resource contents.
 ### Decode method / existing worker
 
 1. Wait for an entry or cancellation; handle channel closure explicitly.
-2. If the entry is terminal, release its credits and return the original error.
+2. If the entry is terminal, return the original error.
 3. Otherwise call the existing `runtime.Decode(objectDecoder, payload)` once.
-4. Drop the entry's raw-payload reference and release admission credits when
-   the decode call finishes, on both success and failure.
+4. Drop the entry's raw-payload reference when the decode call finishes, on
+   both success and failure.
 5. Return the event type and decoded object, retaining existing error wrapping.
 
 Only this consumer invokes the object decoder. On object-decode failure, stop
@@ -178,54 +173,30 @@ contract changes belong in this experiment.
 
 ## Bounded admission and memory
 
-Use two per-stream limits:
+Use one per-stream buffered channel of capacity 50. The envelope reader blocks
+when it tries to send into a full channel; the existing StreamWatcher goroutine
+decodes events from that channel in FIFO order. There is no separate event
+semaphore. Up to 50 queued payloads, one producer-held payload awaiting a send,
+and one active object decode can exist at once.
 
-| Limit | Meaning |
-| --- | --- |
-| K | Maximum raw-event admissions across envelope assembly, pending byte admission, queued entries, and the active object decode |
-| F | Maximum admitted raw-payload backing capacity, across queued entries and active object decode, except the oversized-event compatibility case |
+The fixed size keeps the first version small. Compare other sizes only after
+measuring this version. A 50-event queue can retain substantial memory when
+events approach the frame limit; measure actual queue depth and heap usage.
 
-Start measurements with K=2: one event can be decoded while one is being read
-or queued. K=1 is a useful correctness/overhead control but prevents useful
-envelope/object overlap. Compare K=8 and K=32 only after establishing the
-smallest version's behavior. Queue storage may have capacity K; admission
-credits, not channel length alone, enforce the aggregate K bound.
+There is no separate raw-payload byte limit in this simpler experiment. Each
+held event may have a payload whose size varies up to the existing frame limit;
+the streaming decoder currently uses a 16 MiB maximum frame buffer.
+Payload backing allocations and the framer's assembly buffer add to the memory
+cost. Measure heap/RSS and event sizes before tuning the buffer. Large valid
+events retain their original FIFO order; existing frame-size errors are
+unchanged. Add a byte limit only if measurements justify its complexity.
 
-For F, use 4 MiB as an initial experimental value, not a selected production
-default. It is additional to any existing 4 MiB byte-ring budget. Report both.
-Charge owned backing capacity, not just payload length. If a slice retains a
-larger allocation, account for that allocation or copy into accountable owned
-storage. A simple credit counter protected by a mutex and a cancellable
-notification mechanism is sufficient initially; no custom lock-free queue.
-
-The payload size is known only after envelope decoding. Consequently, one
-producer-held payload awaiting byte admission and the framer's assembly buffer
-exist outside F. The producer must not read another envelope during that wait.
-Document and measure this transient storage rather than claiming F is a strict
-total-memory bound. Retain existing frame validation; the current streaming
-decoder uses a 16 MiB maximum frame buffer. Verify backing allocation behavior
-and any ownership-copy transients for each enabled codec.
-
-A valid payload larger than F must not deadlock or become a new protocol error:
-
-1. Hold it as the producer's single pending event.
-2. Wait until earlier payload admissions have completed object decoding.
-3. Admit it exclusively as an explicitly accounted oversized exception.
-4. Wait for its decode completion before reading the next envelope.
-
-Do not bypass FIFO order. Existing frame-size errors remain unchanged. Record
-oversized exception count and peak size so frequent exceptions are visible.
-
-Release K/F credits after object decoding, not after reflector consumption.
-These limits cover the raw stage; unlike the deferred multi-worker design,
-there is no reorder buffer or pending decoded-result stage inside this decoder.
-Decoded objects subsequently reside in StreamWatcher, its existing bounded
-result channel, the reflector, and stores. If a decoded object retains input
-bytes, those bytes remain part of downstream heap, not reusable raw capacity.
-
-Report total heap/RSS separately. F plus the byte-ring budget does not bound
-decoded object allocations, transport buffers, GC-delayed reclamation, caches,
-or aggregate memory across many streams.
+The raw stage has no reorder buffer or pending decoded-result stage. Decoded
+objects subsequently reside in StreamWatcher, its result channel, the
+reflector, and stores. If a decoded object retains input bytes, those bytes
+remain part of downstream heap. Channel capacity does not bound producer-held
+payloads, transport buffers, decoded objects, GC-delayed reclamation, caches,
+or aggregate memory across streams.
 
 ## Ordering, errors, and cancellation
 
@@ -242,7 +213,7 @@ fails, that failure takes precedence over later queued events/source errors.
 
 - Signal cancellation before any wait for producer shutdown.
 - Close the underlying stream once, interrupting blocked reads as today.
-- Wake event admission, byte admission, channel-send, and channel-receive waits.
+- Wake channel-send and channel-receive waits.
 - Allow shutdown without another reflector receive.
 - Arrange release of queued payload references and credits after their owners
   stop accessing them; do not race a queue drain against an active consumer.
@@ -264,7 +235,7 @@ stopped reading. Do not release byte-ring pages until their actual reader exits.
 
 1. Add serial characterization tests for all event types and existing error
    behavior. Establish benchmark fixtures and baseline revision/configuration.
-2. Implement the opt-in decoder and admission bookkeeping in
+2. Implement the opt-in decoder and bounded queue in
    `staging/src/k8s.io/client-go/rest/watch/`, with ownership and shutdown tests.
    Factor shared envelope validation only where it prevents behavior drift.
 3. Add JSON/protobuf coverage and verify codec state/ownership before enabling
@@ -283,18 +254,16 @@ No apiserver, etcd, vendor, dependency, or generated-file edits are required.
 
 - JSON and protobuf streams produce objects and event types identical to serial
   decoding for Added, Modified, Deleted, Error, Bookmark, and initial/live mixes.
-- A blocked object decoder permits subsequent envelope progress with K>=2;
-  progress stops at admission limits. K=1 completes without deadlock.
-- K includes assembling, byte-waiting, queued, and actively decoded entries.
-  F includes active decoding rather than only entries still in the channel.
-- Many small payloads hit K; a few large payloads hit F. Each wait is cancellable.
-- Oversized valid payloads run exclusively and in order; invalid oversized
-  frames keep existing errors. Neither case leaks admission credits.
+- A blocked object decoder permits subsequent envelope progress; it stops once
+  the queue and producer-held event are full.
+- The queue holds at most 50 entries. A producer-held event and active decode
+  may exist in addition. Send waits are cancellable. Large valid payloads stay
+  in order; invalid frames retain existing errors.
 - Source EOF/error follows the successful prefix. An earlier object failure
   wins over later events/errors. Closed channels never produce zero-value events.
 - Payloads survive subsequent envelope reads unchanged. Cover codecs that reuse
   frame storage and an object decoder retaining a payload reference.
-- Stop during blocked body read, admission, channel send, empty-queue receive,
+- Stop during blocked body read, channel send, empty-queue receive,
   object decode, and blocked result delivery. Repeated/concurrent Stop is safe.
 - No producer leak or retained queued payloads after shutdown; active decoder
   ownership is respected. Use synchronization barriers, not timing assumptions.
@@ -314,10 +283,18 @@ initial-snapshot semantics. These are planned checks, not tests already run.
 
 ## Performance experiment and decision
 
-Compare serial decoding against split decoding with K=2 and F=4 MiB first.
-Use K=1 as the no-overlap control; then vary K without changing F. Record
-oversized exceptions. Do not attribute gains from increased memory to concurrency
-alone: also report actual peak queued payloads and total retained heap.
+Decoder-only benchmarks on an Apple M4 Pro used 100 JSON Pod events per
+iteration, buffer size 2, `-benchtime=200x -count=5`. The original implementation
+with a 4 MiB byte limit had median times of 333 µs serial and 513 µs read-ahead.
+The buffered-channel implementation measured 377 µs serial and 437 µs
+read-ahead, with about 2.8 KiB more allocated per iteration. These fixtures
+have no server, gzip, reflector, or informer store, so they do not measure the
+proposed server write-blocking benefit.
+
+Compare serial decoding against split decoding with the fixed buffer of 50.
+If results justify tuning it, compare other sizes in a separate experiment.
+Do not attribute gains from increased memory to concurrency alone: report
+actual peak queued payloads and total retained heap.
 
 Hold constant request parameters, encoding, gzip, dataset, server/client builds,
 CPU quota, GOMAXPROCS, stream count, result-channel capacity, and any byte-ring
@@ -332,8 +309,13 @@ Measure:
 - Envelope work, object decode work, raw admission waits, queue high-water marks,
   downstream delivery waits, allocation rate, GC, CPU throttling, and heap/RSS.
 
-Stage wall times overlap; they cannot be added into a request duration. Keep
-hot-path tracing optional or aggregated so instrumentation does not dominate.
+Stage wall times overlap; they cannot be added into a request duration. The
+opt-in decoder logs cumulative body read, frame read, WatchEvent deserialize,
+envelope read/decode, queue send wait, object decode, consumer wait, and peak
+queue depth every five seconds and at stream close. In-progress fields expose
+currently blocked stages. Body read is inside frame read, and frame read and
+WatchEvent deserialize are inside envelope read/decode. Turn off the
+experimental decoder when these timing counters are not needed.
 
 The user's earlier trace showed 3.154 seconds of byte-ring space waiting in
 7.898 seconds while reading about 967 MiB of decompressed data with a 4 MiB

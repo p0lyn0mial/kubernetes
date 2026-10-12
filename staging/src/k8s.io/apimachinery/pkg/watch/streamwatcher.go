@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"k8s.io/klog/v2"
 
@@ -57,6 +58,7 @@ type StreamWatcher struct {
 	reporter Reporter
 	result   chan Event
 	done     chan struct{}
+	trace    bool
 }
 
 // NewStreamWatcher creates a StreamWatcher from the given decoder.
@@ -81,6 +83,9 @@ func NewStreamWatcherWithLogger(logger klog.Logger, d Decoder, r Reporter) *Stre
 		// error reporting might block forever.
 		// Therefore a dedicated stop channel is used to resolve this blocking.
 		done: make(chan struct{}),
+	}
+	if traced, ok := d.(interface{ StreamWatcherTraceEnabled() bool }); ok && traced.StreamWatcherTraceEnabled() {
+		sw.trace = true
 	}
 	go sw.receive()
 	return sw
@@ -111,7 +116,14 @@ func (sw *StreamWatcher) receive() {
 	defer close(sw.result)
 	defer sw.Stop()
 	for {
+		var started time.Time
+		if sw.trace {
+			started = time.Now()
+		}
 		action, obj, err := sw.source.Decode()
+		if sw.trace && time.Since(started) >= 5*time.Second {
+			sw.logger.Info("WatchList StreamWatcher Decode completed", "duration", time.Since(started))
+		}
 		if err != nil {
 			switch err {
 			case io.EOF:
@@ -122,24 +134,54 @@ func (sw *StreamWatcher) receive() {
 				if net.IsProbableEOF(err) || net.IsTimeout(err) {
 					sw.logger.V(5).Info("Unable to decode an event from the watch stream", "err", err)
 				} else {
-					select {
-					case <-sw.done:
-					case sw.result <- Event{
+					sw.send(Event{
 						Type:   Error,
 						Object: sw.reporter.AsObject(fmt.Errorf("unable to decode an event from the watch stream: %v", err)),
-					}:
-					}
+					})
 				}
 			}
 			return
 		}
-		select {
-		case <-sw.done:
-			return
-		case sw.result <- Event{
+		if !sw.send(Event{
 			Type:   action,
 			Object: obj,
-		}:
+		}) {
+			return
+		}
+	}
+}
+
+func (sw *StreamWatcher) send(event Event) bool {
+	if !sw.trace {
+		select {
+		case <-sw.done:
+			return false
+		case sw.result <- event:
+			return true
+		}
+	}
+	// Avoid a timer for the common case where the consumer is ready.
+	select {
+	case <-sw.done:
+		return false
+	case sw.result <- event:
+		return true
+	default:
+	}
+	started := time.Now()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sw.done:
+			return false
+		case sw.result <- event:
+			if wait := time.Since(started); wait >= 5*time.Second {
+				sw.logger.Info("WatchList StreamWatcher result send completed", "wait", wait)
+			}
+			return true
+		case <-ticker.C:
+			sw.logger.Info("WatchList StreamWatcher waiting for result consumer", "wait", time.Since(started))
 		}
 	}
 }

@@ -33,6 +33,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -41,6 +42,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	runtimejson "k8s.io/apimachinery/pkg/runtime/serializer/json"
+	runtimeprotobuf "k8s.io/apimachinery/pkg/runtime/serializer/protobuf"
 	"k8s.io/apimachinery/pkg/runtime/serializer/streaming"
 	"k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
@@ -95,7 +98,9 @@ func defaultRequestRetryFn(maxRetries int) WithRetry {
 // Any errors are stored until the end of your call, so you only have to
 // check once.
 type Request struct {
-	c *RESTClient
+	c                             *RESTClient
+	watchListReadAhead            bool
+	watchListReadAheadQueueLength int
 
 	contentConfig     ClientContentConfig
 	contentTypeNotSet bool
@@ -159,14 +164,16 @@ func NewRequest(c *RESTClient) *Request {
 	contentConfig, contentTypeDefaulted := c.content.GetClientContentConfig()
 
 	r := &Request{
-		c:              c,
-		rateLimiter:    c.rateLimiter,
-		backoff:        backoff,
-		timeout:        timeout,
-		pathPrefix:     pathPrefix,
-		maxRetries:     10,
-		retryFn:        defaultRequestRetryFn,
-		warningHandler: c.warningHandler,
+		c:                             c,
+		watchListReadAhead:            c.watchListReadAhead,
+		watchListReadAheadQueueLength: c.watchListReadAheadQueueLength,
+		rateLimiter:                   c.rateLimiter,
+		backoff:                       backoff,
+		timeout:                       timeout,
+		pathPrefix:                    pathPrefix,
+		maxRetries:                    10,
+		retryFn:                       defaultRequestRetryFn,
+		warningHandler:                c.warningHandler,
 
 		contentConfig:     contentConfig,
 		contentTypeNotSet: contentTypeDefaulted,
@@ -843,16 +850,163 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 
 	handleWarnings(ctx, resp.Header, r.warningHandler)
 
+	logger := klog.FromContext(ctx)
+	readAhead := r.useWatchListReadAhead(mediaType, streamingSerializer)
+	if r.watchListReadAhead {
+		logger.Info("WatchList read-ahead selection",
+			"selected", readAhead,
+			"sendInitialEvents", r.params.Get("sendInitialEvents"),
+			"mediaType", mediaType,
+			"serializer", fmt.Sprintf("%T", streamingSerializer))
+	}
+	var bodyTrace *watchListBodyReadTrace
+	if readAhead {
+		bodyTrace = &watchListBodyReadTrace{ReadCloser: resp.Body, logger: logger}
+		resp.Body = bodyTrace
+	}
 	frameReader := framer.NewFrameReader(resp.Body)
-	watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
+	var eventDecoder runtime.Decoder = streamingSerializer
+	var streamTrace *watchListStreamingTrace
+	if readAhead {
+		streamTrace = &watchListStreamingTrace{reader: frameReader, decoder: eventDecoder, logger: logger}
+		frameReader = streamTrace
+		eventDecoder = streamTrace
+	}
+	watchEventDecoder := streaming.NewDecoder(frameReader, eventDecoder)
+	if readAhead {
+		watchEventDecoder = &watchListTraceStream{Decoder: watchEventDecoder, body: bodyTrace, streaming: streamTrace}
+	}
+	decoder := r.newWatchDecoder(ctx, mediaType, streamingSerializer, watchEventDecoder, objectDecoder)
 
 	return watch.NewStreamWatcherWithLogger(
-		klog.FromContext(ctx),
-		restclientwatch.NewDecoder(watchEventDecoder, objectDecoder),
+		logger,
+		decoder,
 		// use 500 to indicate that the cause of the error is unknown - other error codes
 		// are more specific to HTTP interactions, and set a reason
 		errors.NewClientErrorReporter(http.StatusInternalServerError, r.verb, "ClientWatchDecoding"),
 	), nil
+}
+
+func (r *Request) newWatchDecoder(ctx context.Context, mediaType string, serializer runtime.Serializer, stream streaming.Decoder, object runtime.Decoder) watch.Decoder {
+	if r.useWatchListReadAhead(mediaType, serializer) {
+		return restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
+	}
+	return restclientwatch.NewDecoder(stream, object)
+}
+
+func (r *Request) useWatchListReadAhead(mediaType string, serializer runtime.Serializer) bool {
+	supported := false
+	switch serializer.(type) {
+	case *runtimejson.Serializer:
+		supported = mediaType == runtime.ContentTypeJSON
+	case *runtimeprotobuf.Serializer, *runtimeprotobuf.RawSerializer:
+		supported = mediaType == runtime.ContentTypeProtobuf
+	}
+	return r.watchListReadAhead && r.params.Get("sendInitialEvents") == "true" && supported
+}
+
+type watchListBodyReadTrace struct {
+	io.ReadCloser
+	logger    klog.Logger
+	reads     atomic.Int64
+	bytes     atomic.Int64
+	nanos     atomic.Int64
+	readStart atomic.Int64
+}
+
+// watchListStreamingTrace times the frame reader and WatchEvent deserializer
+// inside streaming.Decoder without changing other streaming clients.
+type watchListStreamingTrace struct {
+	reader      io.ReadCloser
+	decoder     runtime.Decoder
+	logger      klog.Logger
+	frameReads  atomic.Int64
+	frameBytes  atomic.Int64
+	shortReads  atomic.Int64
+	frameNanos  atomic.Int64
+	frameStart  atomic.Int64
+	decodeCalls atomic.Int64
+	decodeNanos atomic.Int64
+	decodeStart atomic.Int64
+}
+
+func (t *watchListStreamingTrace) Read(p []byte) (int, error) {
+	start := time.Now()
+	t.frameStart.Store(start.UnixNano())
+	n, err := t.reader.Read(p)
+	t.frameReads.Add(1)
+	t.frameBytes.Add(int64(n))
+	if err == io.ErrShortBuffer {
+		t.shortReads.Add(1)
+	}
+	t.frameNanos.Add(time.Since(start).Nanoseconds())
+	t.frameStart.Store(0)
+	return n, err
+}
+
+func (t *watchListStreamingTrace) Decode(data []byte, defaults *schema.GroupVersionKind, into runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {
+	start := time.Now()
+	t.decodeStart.Store(start.UnixNano())
+	obj, gvk, err := t.decoder.Decode(data, defaults, into)
+	t.decodeCalls.Add(1)
+	t.decodeNanos.Add(time.Since(start).Nanoseconds())
+	t.decodeStart.Store(0)
+	return obj, gvk, err
+}
+
+func (t *watchListStreamingTrace) report(phase string) {
+	t.logger.Info("WatchList streaming decoder trace",
+		"phase", phase,
+		"frameReadCalls", t.frameReads.Load(),
+		"frameBytes", t.frameBytes.Load(),
+		"frameShortBufferCalls", t.shortReads.Load(),
+		"frameReadTime", time.Duration(t.frameNanos.Load()),
+		"frameReadInProgress", activeDuration(t.frameStart.Load()),
+		"watchEventDecodeCalls", t.decodeCalls.Load(),
+		"watchEventDecodeTime", time.Duration(t.decodeNanos.Load()),
+		"watchEventDecodeInProgress", activeDuration(t.decodeStart.Load()))
+}
+
+func (t *watchListStreamingTrace) Close() error {
+	return t.reader.Close()
+}
+
+type watchListTraceStream struct {
+	streaming.Decoder
+	body      *watchListBodyReadTrace
+	streaming *watchListStreamingTrace
+}
+
+func (t *watchListTraceStream) ReportTrace(phase string) {
+	t.body.report(phase)
+	t.streaming.report(phase)
+}
+
+func (t *watchListBodyReadTrace) report(phase string) {
+	t.logger.Info("WatchList read-ahead body trace",
+		"phase", phase,
+		"bodyReadCalls", t.reads.Load(),
+		"bodyReadBytes", t.bytes.Load(),
+		"bodyReadTime", time.Duration(t.nanos.Load()),
+		"bodyReadInProgress", activeDuration(t.readStart.Load()))
+}
+
+func activeDuration(start int64) time.Duration {
+	if start == 0 {
+		return 0
+	}
+	return time.Since(time.Unix(0, start))
+}
+
+func (t *watchListBodyReadTrace) Read(p []byte) (int, error) {
+	start := time.Now()
+	t.readStart.Store(start.UnixNano())
+	n, err := t.ReadCloser.Read(p)
+	t.reads.Add(1)
+	t.bytes.Add(int64(n))
+	t.nanos.Add(time.Since(start).Nanoseconds())
+	t.readStart.Store(0)
+	return n, err
 }
 
 // updateRequestResultMetric increments the RequestResult metric counter,

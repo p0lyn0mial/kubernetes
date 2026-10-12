@@ -285,6 +285,7 @@ func TestConfigToExecClusterRoundtrip(t *testing.T) {
 		expected.TLSClientConfig.NextProtos = nil
 		expected.UserAgent = ""
 		expected.DisableCompression = false
+		expected.ExperimentalWatchListReadAhead = false
 		expected.Transport = nil
 		expected.WrapTransport = nil
 		expected.QPS = 0.0
