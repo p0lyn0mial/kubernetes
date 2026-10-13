@@ -866,20 +866,13 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 		bodyTrace = &watchListBodyReadTrace{ReadCloser: resp.Body, logger: logger}
 		resp.Body = bodyTrace
 	}
-	frameReader := framer.NewFrameReader(resp.Body)
-	var eventDecoder runtime.Decoder = streamingSerializer
-	var streamTrace *watchListStreamingTrace
+	var decoder watch.Decoder
 	if readAhead {
-		streamTrace = &watchListStreamingTrace{reader: frameReader, decoder: eventDecoder, logger: logger}
-		frameReader = streamTrace
-		eventDecoder = streamTrace
-	}
-	watchEventDecoder := streaming.NewDecoder(frameReader, eventDecoder)
-	if readAhead {
-		watchEventDecoder = &watchListTraceStream{Decoder: watchEventDecoder, body: bodyTrace, streaming: streamTrace}
-	}
-	decoder := r.newWatchDecoder(ctx, mediaType, streamingSerializer, watchEventDecoder, objectDecoder)
-	if !readAhead {
+		decoder = restclientwatch.NewBatchReadAheadDecoder(klog.FromContext(ctx), resp.Body, framer, streamingSerializer, objectDecoder, r.watchListReadAheadQueueLength)
+	} else {
+		frameReader := framer.NewFrameReader(resp.Body)
+		var eventDecoder runtime.Decoder = streamingSerializer
+		watchEventDecoder := streaming.NewDecoder(frameReader, eventDecoder)
 		decoder = restclientwatch.NewDecoderWithNetworkTiming(watchEventDecoder, objectDecoder, networkReader)
 	}
 
