@@ -100,6 +100,7 @@ func defaultRequestRetryFn(maxRetries int) WithRetry {
 type Request struct {
 	c                             *RESTClient
 	watchListReadAhead            bool
+	watchListReadAheadDecoder     WatchListReadAheadDecoder
 	watchListReadAheadQueueLength int
 
 	contentConfig     ClientContentConfig
@@ -166,6 +167,7 @@ func NewRequest(c *RESTClient) *Request {
 	r := &Request{
 		c:                             c,
 		watchListReadAhead:            c.watchListReadAhead,
+		watchListReadAheadDecoder:     c.watchListReadAheadDecoder,
 		watchListReadAheadQueueLength: c.watchListReadAheadQueueLength,
 		rateLimiter:                   c.rateLimiter,
 		backoff:                       backoff,
@@ -857,6 +859,7 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 	if r.watchListReadAhead {
 		logger.Info("WatchList read-ahead selection",
 			"selected", readAhead,
+			"decoder", r.watchListReadAheadDecoder,
 			"sendInitialEvents", r.params.Get("sendInitialEvents"),
 			"mediaType", mediaType,
 			"serializer", fmt.Sprintf("%T", streamingSerializer))
@@ -868,7 +871,20 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 	}
 	var decoder watch.Decoder
 	if readAhead {
-		decoder = restclientwatch.NewBatchReadAheadDecoder(klog.FromContext(ctx), resp.Body, framer, streamingSerializer, objectDecoder, r.watchListReadAheadQueueLength)
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent || r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
+			frameReader := framer.NewFrameReader(resp.Body)
+			watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
+			if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
+				decoder = restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength)
+			} else {
+				decoder = restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength)
+			}
+		} else {
+			decoder = restclientwatch.NewBatchReadAheadDecoder(logger, resp.Body, framer, streamingSerializer, objectDecoder, r.watchListReadAheadQueueLength, func(phase string) {
+				bodyTrace.report(phase)
+				logger.Info("WatchList streaming decoder trace", "phase", phase, "watchEventDecodeMode", "batch")
+			})
+		}
 	} else {
 		frameReader := framer.NewFrameReader(resp.Body)
 		var eventDecoder runtime.Decoder = streamingSerializer
@@ -887,6 +903,9 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 
 func (r *Request) newWatchDecoder(ctx context.Context, mediaType string, serializer runtime.Serializer, stream streaming.Decoder, object runtime.Decoder) watch.Decoder {
 	if r.useWatchListReadAhead(mediaType, serializer) {
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
+			return restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
+		}
 		return restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
 	}
 	return restclientwatch.NewDecoder(stream, object)

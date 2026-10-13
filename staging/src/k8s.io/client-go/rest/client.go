@@ -86,6 +86,7 @@ type ClientContentConfig struct {
 // Most consumers should use client.New() to get a Kubernetes API client.
 type RESTClient struct {
 	watchListReadAhead            bool
+	watchListReadAheadDecoder     WatchListReadAheadDecoder
 	watchListReadAheadQueueLength int
 	// base is the root URL for all invocations of the client
 	base *url.URL

@@ -196,8 +196,7 @@ func TestWatchListReadAheadEmitsPeriodicTraces(t *testing.T) {
 		logs := buffer.String()
 		if strings.Contains(logs, "WatchList read-ahead body trace") &&
 			strings.Contains(logs, "WatchList streaming decoder trace") &&
-			strings.Contains(logs, "WatchList read-ahead trace") &&
-			strings.Contains(logs, "WatchList StreamWatcher waiting for result consumer") {
+			strings.Contains(logs, "WatchList read-ahead trace") {
 			break
 		}
 		select {

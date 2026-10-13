@@ -46,9 +46,11 @@ type batchReadAheadDecoder struct {
 	results   chan decodeResult
 	done      chan struct{}
 	closed    chan struct{}
+	traceDone chan struct{}
 	once      sync.Once
 	traceOnce sync.Once
 	trace     batchReadAheadTrace
+	reporters []func(string)
 
 	terminal error
 }
@@ -64,24 +66,52 @@ type batchReadAheadTrace struct {
 
 // NewBatchReadAheadDecoder reads and decodes WatchList response batches while
 // retaining the one-event-at-a-time watch.Decoder contract.
-func NewBatchReadAheadDecoder(logger klog.Logger, body io.ReadCloser, framer runtime.Framer, envelope, object runtime.Decoder, queueLength int) watch.Decoder {
+func NewBatchReadAheadDecoder(logger klog.Logger, body io.ReadCloser, framer runtime.Framer, envelope, object runtime.Decoder, queueLength int, reporters ...func(string)) watch.Decoder {
 	if queueLength <= 0 {
 		queueLength = 100
 	}
 	reader := framer.NewFrameReader(body)
 	d := &batchReadAheadDecoder{
-		reader:   reader,
-		envelope: envelope,
-		object:   object,
-		logger:   logger,
-		batches:  make(chan []rawEvent, max(1, queueLength/batchReadAheadSize)),
-		results:  make(chan decodeResult, batchReadAheadSize*2),
-		done:     make(chan struct{}),
-		closed:   make(chan struct{}),
+		reader:    reader,
+		envelope:  envelope,
+		object:    object,
+		logger:    logger,
+		batches:   make(chan []rawEvent, max(1, queueLength/batchReadAheadSize)),
+		results:   make(chan decodeResult, batchReadAheadSize*2),
+		done:      make(chan struct{}),
+		closed:    make(chan struct{}),
+		traceDone: make(chan struct{}),
+		reporters: reporters,
 	}
 	go d.read()
 	go d.decode()
+	go d.traceLoop()
 	return d
+}
+
+func (d *batchReadAheadDecoder) traceLoop() {
+	defer close(d.traceDone)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			d.reportTrace("periodic")
+		case <-d.done:
+			return
+		}
+	}
+}
+
+func (d *batchReadAheadDecoder) reportTrace(phase string) {
+	d.logger.Info("WatchList read-ahead trace", "phase", phase, "decoder", "batch",
+		"batches", d.trace.batches.Load(), "frames", d.trace.frames.Load(), "bytes", d.trace.bytes.Load(),
+		"objectDecodeTime", time.Duration(d.trace.objectNanos.Load()),
+		"batchQueueWaitTime", time.Duration(d.trace.queueWaitNanos.Load()),
+		"consumerWaitTime", time.Duration(d.trace.consumerWaitNanos.Load()))
+	for _, reporter := range d.reporters {
+		reporter(phase)
+	}
 }
 
 func (d *batchReadAheadDecoder) read() {
@@ -213,14 +243,11 @@ func (d *batchReadAheadDecoder) Close() {
 		_ = d.reader.Close()
 	})
 	<-d.closed
-	d.traceOnce.Do(func() {
-		d.logger.Info("WatchList batch read-ahead trace", "phase", "final",
-			"batches", d.trace.batches.Load(), "frames", d.trace.frames.Load(), "bytes", d.trace.bytes.Load(),
-			"objectDecodeTime", time.Duration(d.trace.objectNanos.Load()),
-			"batchQueueWaitTime", time.Duration(d.trace.queueWaitNanos.Load()),
-			"consumerWaitTime", time.Duration(d.trace.consumerWaitNanos.Load()))
-	})
+	<-d.traceDone
+	d.traceOnce.Do(func() { d.reportTrace("final") })
 }
+
+func (d *batchReadAheadDecoder) StreamWatcherTraceEnabled() bool { return true }
 
 func readBatchFrame(reader io.Reader) ([]byte, error) {
 	buf := make([]byte, 1024)

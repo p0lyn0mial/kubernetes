@@ -44,6 +44,19 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// WatchListReadAheadDecoder identifies an implementation of the experimental
+// WatchList read-ahead decoder.
+type WatchListReadAheadDecoder string
+
+const (
+	// WatchListReadAheadDecoderBatch reads and decodes framed events in batches.
+	WatchListReadAheadDecoderBatch WatchListReadAheadDecoder = "batch"
+	// WatchListReadAheadDecoderConcurrent uses the per-event read-ahead decoder.
+	WatchListReadAheadDecoderConcurrent WatchListReadAheadDecoder = "concurrent"
+	// WatchListReadAheadDecoderSerial uses one envelope reader and decodes objects in Decode.
+	WatchListReadAheadDecoderSerial WatchListReadAheadDecoder = "serial"
+)
+
 const (
 	DefaultQPS   float32 = 5.0
 	DefaultBurst int     = 10
@@ -105,6 +118,10 @@ type Config struct {
 	// ExperimentalWatchListReadAhead enables buffered raw WatchList events.
 	// Disabled by default.
 	ExperimentalWatchListReadAhead bool
+
+	// ExperimentalWatchListReadAheadDecoder selects the WatchList read-ahead implementation.
+	// An empty value selects WatchListReadAheadDecoderBatch.
+	ExperimentalWatchListReadAheadDecoder WatchListReadAheadDecoder
 
 	// ExperimentalWatchListReadAheadQueueLength controls the number of raw WatchList
 	// events buffered by the read-ahead decoder. A non-positive value uses the default.
@@ -407,6 +424,7 @@ func RESTClientForConfigAndClient(config *Config, httpClient *http.Client) (*RES
 	restClient, err := NewRESTClient(baseURL, versionedAPIPath, clientContent, rateLimiter, httpClient)
 	if restClient != nil {
 		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
+		restClient.watchListReadAheadDecoder = config.ExperimentalWatchListReadAheadDecoder
 		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
 	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
@@ -493,6 +511,7 @@ func UnversionedRESTClientForConfigAndClient(config *Config, httpClient *http.Cl
 	restClient, err := NewRESTClient(baseURL, versionedAPIPath, clientContent, rateLimiter, httpClient)
 	if restClient != nil {
 		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
+		restClient.watchListReadAheadDecoder = config.ExperimentalWatchListReadAheadDecoder
 		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
 	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
@@ -662,12 +681,13 @@ func AnonymousClientConfig(config *Config) *Config {
 			CAData:     config.TLSClientConfig.CAData,
 			NextProtos: config.TLSClientConfig.NextProtos,
 		},
-		RateLimiter:                    config.RateLimiter,
-		WarningHandler:                 config.WarningHandler,
-		WarningHandlerWithContext:      config.WarningHandlerWithContext,
-		UserAgent:                      config.UserAgent,
-		DisableCompression:             config.DisableCompression,
-		ExperimentalWatchListReadAhead: config.ExperimentalWatchListReadAhead,
+		RateLimiter:                               config.RateLimiter,
+		WarningHandler:                            config.WarningHandler,
+		WarningHandlerWithContext:                 config.WarningHandlerWithContext,
+		UserAgent:                                 config.UserAgent,
+		DisableCompression:                        config.DisableCompression,
+		ExperimentalWatchListReadAhead:            config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadDecoder:     config.ExperimentalWatchListReadAheadDecoder,
 		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
 		QPS:     config.QPS,
 		Burst:   config.Burst,
@@ -710,17 +730,18 @@ func CopyConfig(config *Config) *Config {
 		UserAgent:                                 config.UserAgent,
 		DisableCompression:                        config.DisableCompression,
 		ExperimentalWatchListReadAhead:            config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadDecoder:     config.ExperimentalWatchListReadAheadDecoder,
 		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
-		Transport:                                 config.Transport,
-		WrapTransport:                             config.WrapTransport,
-		QPS:                                       config.QPS,
-		Burst:                                     config.Burst,
-		RateLimiter:                               config.RateLimiter,
-		WarningHandler:                            config.WarningHandler,
-		WarningHandlerWithContext:                 config.WarningHandlerWithContext,
-		Timeout:                                   config.Timeout,
-		Dial:                                      config.Dial,
-		Proxy:                                     config.Proxy,
+		Transport:                 config.Transport,
+		WrapTransport:             config.WrapTransport,
+		QPS:                       config.QPS,
+		Burst:                     config.Burst,
+		RateLimiter:               config.RateLimiter,
+		WarningHandler:            config.WarningHandler,
+		WarningHandlerWithContext: config.WarningHandlerWithContext,
+		Timeout:                   config.Timeout,
+		Dial:                      config.Dial,
+		Proxy:                     config.Proxy,
 	}
 	if config.ExecProvider != nil && config.ExecProvider.Config != nil {
 		c.ExecProvider.Config = config.ExecProvider.Config.DeepCopyObject()
