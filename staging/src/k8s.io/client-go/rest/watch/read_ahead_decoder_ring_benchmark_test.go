@@ -42,6 +42,8 @@ func benchmarkDecoder(mode string, stream streaming.Decoder, object runtime.Deco
 	switch mode {
 	case "ring":
 		return NewRingReadAheadDecoder(stream, object, queue, workers)
+	case "ordered":
+		return NewOrderedReadAheadDecoder(stream, object, queue, workers)
 	case "concurrent":
 		return NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logr.Discard(), stream, object, queue, workers)
 	case "serial":
@@ -53,8 +55,11 @@ func benchmarkDecoder(mode string, stream streaming.Decoder, object runtime.Deco
 
 func closeBenchmarkDecoder(decoder watch.Decoder) {
 	decoder.Close()
-	if ring, ok := decoder.(*RingReadAheadDecoder); ok {
-		<-ring.cleanupDone
+	switch d := decoder.(type) {
+	case *RingReadAheadDecoder:
+		<-d.cleanupDone
+	case *OrderedReadAheadDecoder:
+		<-d.cleanupDone
 	}
 }
 
@@ -123,7 +128,7 @@ func (d *allocationFreeBenchmarkObject) Decode(_ []byte, _ *schema.GroupVersionK
 // Construction and warmup are excluded; queue memory is measured separately.
 func BenchmarkReadAheadPipeline(b *testing.B) {
 	for _, config := range readAheadBenchmarkConfigs {
-		for _, mode := range []string{"serial", "concurrent", "ring"} {
+		for _, mode := range []string{"serial", "concurrent", "ring", "ordered"} {
 			b.Run(fmt.Sprintf("%s/queue=%d/workers=%d", mode, config.queue, config.workers), func(b *testing.B) {
 				benchmarkReadAheadPipeline(b, mode, config.queue, config.workers)
 			})
@@ -195,7 +200,7 @@ func BenchmarkReadAheadCodecs(b *testing.B) {
 			b.Fatal(err)
 		}
 		for _, config := range readAheadBenchmarkConfigs {
-			for _, mode := range []string{"serial", "concurrent", "ring"} {
+			for _, mode := range []string{"serial", "concurrent", "ring", "ordered"} {
 				b.Run(fmt.Sprintf("%s/%s/queue=%d/workers=%d", info.MediaType, mode, config.queue, config.workers), func(b *testing.B) {
 					reader := &cyclingBenchmarkReader{data: wire.Bytes()}
 					warmup := 2*(config.queue+config.workers) + 128
@@ -233,7 +238,7 @@ func BenchmarkReadAheadCodecs(b *testing.B) {
 // memory visible instead of hiding them in the steady-state measurements.
 func BenchmarkReadAheadConstruction(b *testing.B) {
 	for _, config := range readAheadBenchmarkConfigs {
-		for _, mode := range []string{"concurrent", "ring"} {
+		for _, mode := range []string{"concurrent", "ring", "ordered"} {
 			b.Run(fmt.Sprintf("%s/queue=%d/workers=%d", mode, config.queue, config.workers), func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
