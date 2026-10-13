@@ -33,5 +33,9 @@ func NewConcurrentReadAheadDecoder(stream streaming.Decoder, object runtime.Deco
 }
 
 func NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(logger klog.Logger, stream streaming.Decoder, object runtime.Decoder, queueLength int) *ConcurrentReadAheadDecoder {
-	return NewReadAheadDecoderWithLoggerAndQueueLength(logger, stream, object, queueLength)
+	return NewConcurrentReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger, stream, object, queueLength, 0)
+}
+
+func NewConcurrentReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger klog.Logger, stream streaming.Decoder, object runtime.Decoder, queueLength, decodeConcurrency int) *ConcurrentReadAheadDecoder {
+	return NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger, stream, object, queueLength, decodeConcurrency)
 }

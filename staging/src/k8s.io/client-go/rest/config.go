@@ -127,6 +127,11 @@ type Config struct {
 	// events buffered by the read-ahead decoder. A non-positive value uses the default.
 	ExperimentalWatchListReadAheadQueueLength int
 
+	// ExperimentalWatchListReadAheadDecodeConcurrency controls the number of concurrent
+	// object decoders used by the concurrent WatchList read-ahead decoder. A non-positive
+	// value uses the default.
+	ExperimentalWatchListReadAheadDecodeConcurrency int
+
 	// Transport may be used for custom HTTP behavior. This attribute may not
 	// be specified with the TLS client certificate options. Use WrapTransport
 	// to provide additional per-server middleware behavior.
@@ -426,6 +431,7 @@ func RESTClientForConfigAndClient(config *Config, httpClient *http.Client) (*RES
 		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
 		restClient.watchListReadAheadDecoder = config.ExperimentalWatchListReadAheadDecoder
 		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
+		restClient.watchListReadAheadDecodeConcurrency = config.ExperimentalWatchListReadAheadDecodeConcurrency
 	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
 	return restClient, err
@@ -513,6 +519,7 @@ func UnversionedRESTClientForConfigAndClient(config *Config, httpClient *http.Cl
 		restClient.watchListReadAhead = config.ExperimentalWatchListReadAhead
 		restClient.watchListReadAheadDecoder = config.ExperimentalWatchListReadAheadDecoder
 		restClient.watchListReadAheadQueueLength = config.ExperimentalWatchListReadAheadQueueLength
+		restClient.watchListReadAheadDecodeConcurrency = config.ExperimentalWatchListReadAheadDecodeConcurrency
 	}
 	maybeSetWarningHandler(restClient, config.WarningHandler, config.WarningHandlerWithContext)
 	return restClient, err
@@ -681,14 +688,15 @@ func AnonymousClientConfig(config *Config) *Config {
 			CAData:     config.TLSClientConfig.CAData,
 			NextProtos: config.TLSClientConfig.NextProtos,
 		},
-		RateLimiter:                               config.RateLimiter,
-		WarningHandler:                            config.WarningHandler,
-		WarningHandlerWithContext:                 config.WarningHandlerWithContext,
-		UserAgent:                                 config.UserAgent,
-		DisableCompression:                        config.DisableCompression,
-		ExperimentalWatchListReadAhead:            config.ExperimentalWatchListReadAhead,
-		ExperimentalWatchListReadAheadDecoder:     config.ExperimentalWatchListReadAheadDecoder,
-		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
+		RateLimiter:                                     config.RateLimiter,
+		WarningHandler:                                  config.WarningHandler,
+		WarningHandlerWithContext:                       config.WarningHandlerWithContext,
+		UserAgent:                                       config.UserAgent,
+		DisableCompression:                              config.DisableCompression,
+		ExperimentalWatchListReadAhead:                  config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadDecoder:           config.ExperimentalWatchListReadAheadDecoder,
+		ExperimentalWatchListReadAheadQueueLength:       config.ExperimentalWatchListReadAheadQueueLength,
+		ExperimentalWatchListReadAheadDecodeConcurrency: config.ExperimentalWatchListReadAheadDecodeConcurrency,
 		QPS:     config.QPS,
 		Burst:   config.Burst,
 		Timeout: config.Timeout,
@@ -727,11 +735,12 @@ func CopyConfig(config *Config) *Config {
 			CAData:     config.TLSClientConfig.CAData,
 			NextProtos: config.TLSClientConfig.NextProtos,
 		},
-		UserAgent:                                 config.UserAgent,
-		DisableCompression:                        config.DisableCompression,
-		ExperimentalWatchListReadAhead:            config.ExperimentalWatchListReadAhead,
-		ExperimentalWatchListReadAheadDecoder:     config.ExperimentalWatchListReadAheadDecoder,
-		ExperimentalWatchListReadAheadQueueLength: config.ExperimentalWatchListReadAheadQueueLength,
+		UserAgent:                                       config.UserAgent,
+		DisableCompression:                              config.DisableCompression,
+		ExperimentalWatchListReadAhead:                  config.ExperimentalWatchListReadAhead,
+		ExperimentalWatchListReadAheadDecoder:           config.ExperimentalWatchListReadAheadDecoder,
+		ExperimentalWatchListReadAheadQueueLength:       config.ExperimentalWatchListReadAheadQueueLength,
+		ExperimentalWatchListReadAheadDecodeConcurrency: config.ExperimentalWatchListReadAheadDecodeConcurrency,
 		Transport:                 config.Transport,
 		WrapTransport:             config.WrapTransport,
 		QPS:                       config.QPS,

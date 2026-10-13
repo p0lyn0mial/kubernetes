@@ -37,7 +37,7 @@ var (
 
 const defaultReadAheadBufferSize = 100
 const readAheadTraceInterval = 5 * time.Second
-const readAheadDecodeConcurrency = 10
+const defaultReadAheadDecodeConcurrency = 10
 
 type readAheadTrace struct {
 	logger            klog.Logger
@@ -121,19 +121,20 @@ type decodeResult struct {
 // ReadAheadDecoder overlaps envelope reading with bounded concurrent object decoding.
 // Decode must be called by only one goroutine.
 type ReadAheadDecoder struct {
-	stream     streaming.Decoder
-	object     runtime.Decoder
-	queue      chan rawEvent
-	jobs       chan decodeJob
-	responses  chan chan decodeResult
-	decoded    chan decodeResult
-	done       chan struct{}
-	readDone   chan struct{}
-	decodeDone chan struct{}
-	traceDone  chan struct{}
-	once       sync.Once
-	traceOnce  sync.Once
-	trace      *readAheadTrace
+	stream            streaming.Decoder
+	object            runtime.Decoder
+	decodeConcurrency int
+	queue             chan rawEvent
+	jobs              chan decodeJob
+	responses         chan chan decodeResult
+	decoded           chan decodeResult
+	done              chan struct{}
+	readDone          chan struct{}
+	decodeDone        chan struct{}
+	traceDone         chan struct{}
+	once              sync.Once
+	traceOnce         sync.Once
+	trace             *readAheadTrace
 
 	terminal error
 }
@@ -152,20 +153,31 @@ func NewReadAheadDecoderWithLogger(logger klog.Logger, stream streaming.Decoder,
 // NewReadAheadDecoderWithLoggerAndQueueLength records stage timings and uses queueLength
 // as the raw event queue capacity. A non-positive queueLength uses the default capacity.
 func NewReadAheadDecoderWithLoggerAndQueueLength(logger klog.Logger, stream streaming.Decoder, object runtime.Decoder, queueLength int) *ReadAheadDecoder {
+	return NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger, stream, object, queueLength, 0)
+}
+
+// NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency records stage timings,
+// uses queueLength as the raw event queue capacity, and limits object decoding to
+// decodeConcurrency goroutines. Non-positive values use the defaults.
+func NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger klog.Logger, stream streaming.Decoder, object runtime.Decoder, queueLength, decodeConcurrency int) *ReadAheadDecoder {
 	if queueLength <= 0 {
 		queueLength = defaultReadAheadBufferSize
 	}
+	if decodeConcurrency <= 0 {
+		decodeConcurrency = defaultReadAheadDecodeConcurrency
+	}
 	d := &ReadAheadDecoder{
-		stream:     stream,
-		object:     object,
-		queue:      make(chan rawEvent, queueLength),
-		jobs:       make(chan decodeJob, readAheadDecodeConcurrency),
-		responses:  make(chan chan decodeResult, readAheadDecodeConcurrency-1),
-		decoded:    make(chan decodeResult, readAheadDecodeConcurrency),
-		done:       make(chan struct{}),
-		readDone:   make(chan struct{}),
-		decodeDone: make(chan struct{}),
-		traceDone:  make(chan struct{}),
+		stream:            stream,
+		object:            object,
+		decodeConcurrency: decodeConcurrency,
+		queue:             make(chan rawEvent, queueLength),
+		jobs:              make(chan decodeJob, decodeConcurrency),
+		responses:         make(chan chan decodeResult, decodeConcurrency-1),
+		decoded:           make(chan decodeResult, decodeConcurrency),
+		done:              make(chan struct{}),
+		readDone:          make(chan struct{}),
+		decodeDone:        make(chan struct{}),
+		traceDone:         make(chan struct{}),
 	}
 	d.trace = &readAheadTrace{logger: logger}
 	go d.read()
@@ -183,8 +195,8 @@ func (d *ReadAheadDecoder) decode() {
 		close(d.decodeDone)
 	}()
 	var workers sync.WaitGroup
-	workers.Add(readAheadDecodeConcurrency)
-	for i := 0; i < readAheadDecodeConcurrency; i++ {
+	workers.Add(d.decodeConcurrency)
+	for i := 0; i < d.decodeConcurrency; i++ {
 		go func() {
 			defer workers.Done()
 			for job := range d.jobs {

@@ -288,6 +288,7 @@ func TestConfigToExecClusterRoundtrip(t *testing.T) {
 		expected.ExperimentalWatchListReadAhead = false
 		expected.ExperimentalWatchListReadAheadDecoder = ""
 		expected.ExperimentalWatchListReadAheadQueueLength = 0
+		expected.ExperimentalWatchListReadAheadDecodeConcurrency = 0
 		expected.Transport = nil
 		expected.WrapTransport = nil
 		expected.QPS = 0.0

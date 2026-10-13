@@ -25,6 +25,7 @@ remote_image=${WATCHLIST_BENCHMARK_IMAGE:-request-benchmark:watchlist-read-ahead
 replicas=${WATCHLIST_REPLICAS:-10}
 benchmark_mode=${WATCHLIST_MODE:-informer}
 read_ahead=${WATCHLIST_ENABLE_READ_AHEAD:-true}
+decoder=${WATCHLIST_READ_AHEAD_DECODER:-}
 queue_length=${WATCHLIST_READ_AHEAD_QUEUE_LENGTH:-1000}
 benchmark_cpu=${WATCHLIST_CPU:-3}
 log_dir=${WATCHLIST_LOG_DIR:-"$PWD/watchlist-logs-$(date -u +%Y%m%dT%H%M%SZ)"}
@@ -34,11 +35,11 @@ mkdir -p "$log_dir"
 run_log="$log_dir/clusterloader.log"
 client_log="$log_dir/client-0.log"
 
-remote_run=$(printf 'WATCHLIST_CLUSTER_NAME=%q WATCHLIST_BENCHMARK_IMAGE=%q WATCHLIST_MODE=%q WATCHLIST_REPLICAS=%q WATCHLIST_CPU=%q WATCHLIST_ENABLE_READ_AHEAD=%q WATCHLIST_READ_AHEAD_QUEUE_LENGTH=%q %s benchmark' \
-  "$cluster_name" "$remote_image" "$benchmark_mode" "$replicas" "$benchmark_cpu" "$read_ahead" "$queue_length" "$remote_script")
+remote_run=$(printf 'WATCHLIST_CLUSTER_NAME=%q WATCHLIST_BENCHMARK_IMAGE=%q WATCHLIST_MODE=%q WATCHLIST_REPLICAS=%q WATCHLIST_CPU=%q WATCHLIST_ENABLE_READ_AHEAD=%q WATCHLIST_READ_AHEAD_DECODER=%q WATCHLIST_READ_AHEAD_QUEUE_LENGTH=%q %s benchmark' \
+  "$cluster_name" "$remote_image" "$benchmark_mode" "$replicas" "$benchmark_cpu" "$read_ahead" "$decoder" "$queue_length" "$remote_script")
 
 echo "remote=$remote"
-echo "cluster=$cluster_name mode=$benchmark_mode replicas=$replicas cpu=$benchmark_cpu image=$remote_image read_ahead=$read_ahead queue_length=$queue_length"
+echo "cluster=$cluster_name mode=$benchmark_mode replicas=$replicas cpu=$benchmark_cpu image=$remote_image read_ahead=$read_ahead decoder=$decoder queue_length=$queue_length"
 echo "client log: $client_log"
 
 ssh "${ssh_opts[@]}" "$remote" "$remote_run" >"$run_log" 2>&1 &

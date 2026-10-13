@@ -23,10 +23,11 @@ local_port=${1:-3000}
 
 ssh_key=${WATCHLIST_SSH_KEY:-"$HOME/.ssh/id_rsa"}
 remote_host=${WATCHLIST_REMOTE_HOST:-lukasz.szaszkiewicz@34.118.97.146}
+cluster_name=${WATCHLIST_CLUSTER_NAME:-watchlist-branch}
 [[ -f $ssh_key ]] || { echo "SSH key not found: $ssh_key" >&2; exit 1; }
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 -i "$ssh_key" "$remote_host" \
-  'bash ~/perf-tests/clusterloader2/testing/list/watchlist-profile-remote.sh grafana'
+  "WATCHLIST_CLUSTER_NAME=$(printf '%q' "$cluster_name") bash ~/perf-tests/clusterloader2/testing/list/watchlist-profile-remote.sh grafana"
 
 echo "Dashboard: http://127.0.0.1:$local_port/d/watchlist-remote/watchlist-remote-benchmark" >&2
 echo "Grafana: http://127.0.0.1:$local_port (keep this tunnel open)" >&2

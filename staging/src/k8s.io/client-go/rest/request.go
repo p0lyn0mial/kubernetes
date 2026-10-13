@@ -98,10 +98,11 @@ func defaultRequestRetryFn(maxRetries int) WithRetry {
 // Any errors are stored until the end of your call, so you only have to
 // check once.
 type Request struct {
-	c                             *RESTClient
-	watchListReadAhead            bool
-	watchListReadAheadDecoder     WatchListReadAheadDecoder
-	watchListReadAheadQueueLength int
+	c                                   *RESTClient
+	watchListReadAhead                  bool
+	watchListReadAheadDecoder           WatchListReadAheadDecoder
+	watchListReadAheadQueueLength       int
+	watchListReadAheadDecodeConcurrency int
 
 	contentConfig     ClientContentConfig
 	contentTypeNotSet bool
@@ -165,17 +166,18 @@ func NewRequest(c *RESTClient) *Request {
 	contentConfig, contentTypeDefaulted := c.content.GetClientContentConfig()
 
 	r := &Request{
-		c:                             c,
-		watchListReadAhead:            c.watchListReadAhead,
-		watchListReadAheadDecoder:     c.watchListReadAheadDecoder,
-		watchListReadAheadQueueLength: c.watchListReadAheadQueueLength,
-		rateLimiter:                   c.rateLimiter,
-		backoff:                       backoff,
-		timeout:                       timeout,
-		pathPrefix:                    pathPrefix,
-		maxRetries:                    10,
-		retryFn:                       defaultRequestRetryFn,
-		warningHandler:                c.warningHandler,
+		c:                                   c,
+		watchListReadAhead:                  c.watchListReadAhead,
+		watchListReadAheadDecoder:           c.watchListReadAheadDecoder,
+		watchListReadAheadQueueLength:       c.watchListReadAheadQueueLength,
+		watchListReadAheadDecodeConcurrency: c.watchListReadAheadDecodeConcurrency,
+		rateLimiter:                         c.rateLimiter,
+		backoff:                             backoff,
+		timeout:                             timeout,
+		pathPrefix:                          pathPrefix,
+		maxRetries:                          10,
+		retryFn:                             defaultRequestRetryFn,
+		warningHandler:                      c.warningHandler,
 
 		contentConfig:     contentConfig,
 		contentTypeNotSet: contentTypeDefaulted,
@@ -877,7 +879,7 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 			if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
 				decoder = restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength)
 			} else {
-				decoder = restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength)
+				decoder = restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
 			}
 		} else {
 			decoder = restclientwatch.NewBatchReadAheadDecoder(logger, resp.Body, framer, streamingSerializer, objectDecoder, r.watchListReadAheadQueueLength, func(phase string) {
@@ -906,7 +908,7 @@ func (r *Request) newWatchDecoder(ctx context.Context, mediaType string, seriali
 		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
 			return restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
 		}
-		return restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
+		return restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
 	}
 	return restclientwatch.NewDecoder(stream, object)
 }
