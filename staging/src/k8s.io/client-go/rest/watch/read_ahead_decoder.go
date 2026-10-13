@@ -172,12 +172,15 @@ func NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger klog.Logge
 		decodeConcurrency: decodeConcurrency,
 		queue:             make(chan rawEvent, queueLength),
 		jobs:              make(chan decodeJob, decodeConcurrency),
-		responses:         make(chan chan decodeResult, decodeConcurrency-1),
-		decoded:           make(chan decodeResult, decodeConcurrency),
-		done:              make(chan struct{}),
-		readDone:          make(chan struct{}),
-		decodeDone:        make(chan struct{}),
-		traceDone:         make(chan struct{}),
+		// Leave room for completed results behind a slow event so ordering
+		// does not limit outstanding work to the number of workers. The
+		// ordered collector holds one additional response outside this queue.
+		responses:  make(chan chan decodeResult, queueLength+decodeConcurrency-1),
+		decoded:    make(chan decodeResult, decodeConcurrency),
+		done:       make(chan struct{}),
+		readDone:   make(chan struct{}),
+		decodeDone: make(chan struct{}),
+		traceDone:  make(chan struct{}),
 	}
 	d.trace = &readAheadTrace{logger: logger}
 	go d.read()

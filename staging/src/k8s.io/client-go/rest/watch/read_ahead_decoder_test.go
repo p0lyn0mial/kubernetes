@@ -20,7 +20,9 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -236,6 +238,79 @@ func TestReadAheadDecoderDefaultBuffer(t *testing.T) {
 		if cap(decoder.queue) != defaultReadAheadBufferSize {
 			t.Fatalf("queue capacity = %d, want %d", cap(decoder.queue), defaultReadAheadBufferSize)
 		}
+	}
+}
+
+type firstBlockedObjectDecoder struct {
+	runtime.Decoder
+	resume    chan struct{}
+	completed chan string
+}
+
+func (d *firstBlockedObjectDecoder) Decode(data []byte, defaults *schema.GroupVersionKind, into runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {
+	obj, gvk, err := d.Decoder.Decode(data, defaults, into)
+	if err != nil {
+		return obj, gvk, err
+	}
+	name := obj.(*v1.Pod).Name
+	if name == "0" {
+		<-d.resume
+	}
+	d.completed <- name
+	return obj, gvk, nil
+}
+
+func TestReadAheadDecoderProgressBehindSlowEvent(t *testing.T) {
+	for _, concurrency := range []int{2, 4} {
+		t.Run(strconv.Itoa(concurrency), func(t *testing.T) {
+			const queueLength = 8
+			const events = 20
+			var wire bytes.Buffer
+			for i := 0; i < events; i++ {
+				wire.WriteString(`{"type":"ADDED","object":{"apiVersion":"v1","kind":"Pod","metadata":{"name":"` + strconv.Itoa(i) + `"}}}` + "\n")
+			}
+			var info runtime.SerializerInfo
+			for _, candidate := range scheme.Codecs.SupportedMediaTypes() {
+				if candidate.MediaType == runtime.ContentTypeJSON {
+					info = candidate
+					break
+				}
+			}
+			stream := streaming.NewDecoder(info.StreamSerializer.Framer.NewFrameReader(io.NopCloser(&wire)), info.StreamSerializer.Serializer)
+			object := &firstBlockedObjectDecoder{
+				Decoder: getDecoder(), resume: make(chan struct{}), completed: make(chan string, events),
+			}
+			decoder := NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(klog.Background(), stream, object, queueLength, concurrency)
+			defer decoder.Close()
+			// Release the blocked decoder even when an assertion fails.
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(object.resume) }) }
+			defer release()
+			for i := 0; i < queueLength+concurrency-1; i++ {
+				select {
+				case name := <-object.completed:
+					if name == "0" {
+						t.Fatal("first decode completed before release")
+					}
+				case <-time.After(5 * time.Second):
+					t.Fatalf("only %d later events decoded while the first event was blocked", i)
+				}
+			}
+			release()
+			for i := 0; i < events; i++ {
+				action, obj, err := decoder.Decode()
+				if err != nil {
+					t.Fatalf("event %d: %v", i, err)
+				}
+				pod, ok := obj.(*v1.Pod)
+				if action != watch.Added || !ok || pod.Name != strconv.Itoa(i) {
+					t.Fatalf("event %d: type %s, object %#v", i, action, obj)
+				}
+			}
+			if _, _, err := decoder.Decode(); !errors.Is(err, io.EOF) {
+				t.Fatalf("terminal error = %v, want EOF", err)
+			}
+		})
 	}
 }
 
