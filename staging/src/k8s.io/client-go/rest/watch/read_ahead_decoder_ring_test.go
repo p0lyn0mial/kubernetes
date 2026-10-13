@@ -222,6 +222,38 @@ func TestRingReadAheadDecoderEnvelopeErrors(t *testing.T) {
 	}
 }
 
+func TestRingReadAheadDecoderStreamErrorBehindBlockedObject(t *testing.T) {
+	terminal := errors.New("test stream failure")
+	stream := &ringTestStream{action: string(watch.Added), payloads: [][]byte{{0}}, terminal: terminal}
+	object := &ringTestObjectDecoder{objects: make([]v1.Pod, 1), resume: make(chan struct{}), fail: -1}
+	decoder := NewRingReadAheadDecoder(stream, object, 1, 1)
+	defer closeRingTestDecoder(t, decoder)
+	var once sync.Once
+	release := func() { once.Do(func() { close(object.resume) }) }
+	defer release()
+
+	select {
+	case <-decoder.readDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("stream reader did not finish while object decode was blocked")
+	}
+	// The reader can publish its error before a worker finishes an earlier event.
+	// Decode must still consume that earlier event first.
+	if len(decoder.slots[1].results) != 1 {
+		t.Fatal("stream error was not published while object decode was blocked")
+	}
+	release()
+	action, obj, err := decoder.Decode()
+	if err != nil || action != watch.Added || obj != &object.objects[0] {
+		t.Fatalf("first event: %s, %#v, %v", action, obj, err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := decoder.Decode(); !errors.Is(err, terminal) {
+			t.Fatalf("terminal error = %v, want stream failure", err)
+		}
+	}
+}
+
 func TestRingReadAheadDecoderClose(t *testing.T) {
 	t.Run("blocked stream", func(t *testing.T) {
 		reader, writer := io.Pipe()
@@ -268,7 +300,7 @@ func TestRingReadAheadDecoderClose(t *testing.T) {
 			t.Fatal("cleanup did not finish")
 		}
 		for i := range decoder.slots {
-			if decoder.slots[i].envelope.Object.Raw != nil || decoder.slots[i].result.object != nil || len(decoder.slots[i].ready) != 0 {
+			if decoder.slots[i].envelope.Object.Raw != nil || len(decoder.slots[i].results) != 0 {
 				t.Fatalf("slot %d retained payload or object", i)
 			}
 		}
@@ -335,7 +367,7 @@ func TestRingReadAheadDecoderConcurrentCloseAndConsumption(t *testing.T) {
 		}
 		closeRingTestDecoder(t, decoder)
 		for i := range decoder.slots {
-			if decoder.slots[i].result.object != nil || decoder.slots[i].envelope.Object.Raw != nil {
+			if len(decoder.slots[i].results) != 0 || decoder.slots[i].envelope.Object.Raw != nil {
 				t.Fatalf("iteration %d slot %d retained an object", iteration, i)
 			}
 		}

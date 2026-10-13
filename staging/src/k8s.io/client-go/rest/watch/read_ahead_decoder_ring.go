@@ -27,12 +27,10 @@ import (
 )
 
 type ringDecodeSlot struct {
-	// The job transfers envelope ownership to a worker; the ready token
-	// transfers result ownership to the consumer before the slot is recycled.
+	// The job transfers envelope ownership to a worker; the result channel
+	// transfers object ownership to the consumer before the slot is recycled.
 	envelope metav1.WatchEvent
-	err      error
-	result   decodeResult
-	ready    chan struct{}
+	results  chan decodeResult
 }
 
 // RingReadAheadDecoder decodes objects concurrently using a fixed ring of
@@ -80,7 +78,7 @@ func NewRingReadAheadDecoder(stream streaming.Decoder, object runtime.Decoder, q
 		cleanupDone: make(chan struct{}),
 	}
 	for i := range d.slots {
-		d.slots[i].ready = make(chan struct{}, 1)
+		d.slots[i].results = make(chan decodeResult, 1)
 		d.free <- struct{}{}
 	}
 	var workers sync.WaitGroup
@@ -94,16 +92,14 @@ func NewRingReadAheadDecoder(stream streaming.Decoder, object runtime.Decoder, q
 	go d.read()
 	go func() {
 		// Cleanup waits for ownership to return from the reader and workers.
-		// Receiving from ready also safely competes with a concurrent Decode.
+		// Draining result channels also safely competes with a concurrent Decode.
 		<-d.done
 		<-d.readDone
 		workers.Wait()
 		for i := range d.slots {
 			d.slots[i].envelope = metav1.WatchEvent{}
-			d.slots[i].err = nil
 			select {
-			case <-d.slots[i].ready:
-				d.slots[i].result = decodeResult{}
+			case <-d.slots[i].results:
 			default:
 			}
 		}
@@ -141,17 +137,19 @@ func (d *RingReadAheadDecoder) read() {
 				err = fmt.Errorf("got invalid watch event type: %v", slot.envelope.Type)
 			}
 		}
-		slot.err = err
 		if err != nil {
 			slot.envelope = metav1.WatchEvent{}
+			// Publish stream errors in their slot so earlier jobs remain ordered.
+			select {
+			case <-d.done:
+			case slot.results <- decodeResult{err: err}:
+			}
+			return
 		}
 		select {
 		case <-d.done:
 			return
 		case d.jobs <- slot:
-		}
-		if err != nil {
-			return
 		}
 		next++
 		if next == len(d.slots) {
@@ -177,24 +175,18 @@ func (d *RingReadAheadDecoder) work() {
 			}
 			slot = job
 		}
-		result := decodeResult{err: slot.err}
-		if result.err == nil {
-			result.action = watch.EventType(slot.envelope.Type)
-			result.object, result.err = runtime.Decode(d.object, slot.envelope.Object.Raw)
-			if result.err != nil {
-				result = decodeResult{err: fmt.Errorf("unable to decode watch event: %v", result.err), closeOnError: true}
-			}
+		result := decodeResult{action: watch.EventType(slot.envelope.Type)}
+		result.object, result.err = runtime.Decode(d.object, slot.envelope.Object.Raw)
+		if result.err != nil {
+			result = decodeResult{err: fmt.Errorf("unable to decode watch event: %v", result.err), closeOnError: true}
 		}
 		// Returned objects belong to the consumer and must never be pooled.
 		// Release raw payloads before publishing completion and reusing slots.
 		slot.envelope = metav1.WatchEvent{}
-		slot.err = nil
-		slot.result = result
 		select {
 		case <-d.done:
-			slot.result = decodeResult{}
 			return
-		case slot.ready <- struct{}{}:
+		case slot.results <- result:
 		}
 	}
 }
@@ -213,10 +205,7 @@ func (d *RingReadAheadDecoder) Decode() (watch.EventType, runtime.Object, error)
 	select {
 	case <-d.done:
 		return "", nil, errReadAheadClosed
-	case <-d.slots[d.next].ready:
-		slot := &d.slots[d.next]
-		result := slot.result
-		slot.result = decodeResult{}
+	case result := <-d.slots[d.next].results:
 		d.next++
 		if d.next == len(d.slots) {
 			d.next = 0
