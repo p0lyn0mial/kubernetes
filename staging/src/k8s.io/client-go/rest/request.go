@@ -873,10 +873,12 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 	}
 	var decoder watch.Decoder
 	if readAhead {
-		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent || r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent || r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial || r.watchListReadAheadDecoder == WatchListReadAheadDecoderRing {
 			frameReader := framer.NewFrameReader(resp.Body)
 			watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
-			if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
+			if r.watchListReadAheadDecoder == WatchListReadAheadDecoderRing {
+				decoder = restclientwatch.NewRingReadAheadDecoder(watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
+			} else if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
 				decoder = restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength)
 			} else {
 				decoder = restclientwatch.NewConcurrentReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger, watchEventDecoder, objectDecoder, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
@@ -905,6 +907,9 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 
 func (r *Request) newWatchDecoder(ctx context.Context, mediaType string, serializer runtime.Serializer, stream streaming.Decoder, object runtime.Decoder) watch.Decoder {
 	if r.useWatchListReadAhead(mediaType, serializer) {
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderRing {
+			return restclientwatch.NewRingReadAheadDecoder(stream, object, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
+		}
 		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial {
 			return restclientwatch.NewSerialReadAheadDecoderWithLoggerAndQueueLength(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength)
 		}

@@ -53,6 +53,8 @@ const (
 	WatchListReadAheadDecoderBatch WatchListReadAheadDecoder = "batch"
 	// WatchListReadAheadDecoderConcurrent uses the per-event read-ahead decoder.
 	WatchListReadAheadDecoderConcurrent WatchListReadAheadDecoder = "concurrent"
+	// WatchListReadAheadDecoderRing uses reusable slots without per-event timing traces.
+	WatchListReadAheadDecoderRing WatchListReadAheadDecoder = "ring"
 	// WatchListReadAheadDecoderSerial uses one envelope reader and decodes objects in Decode.
 	WatchListReadAheadDecoderSerial WatchListReadAheadDecoder = "serial"
 )
