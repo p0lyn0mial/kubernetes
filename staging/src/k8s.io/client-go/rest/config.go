@@ -55,6 +55,8 @@ const (
 	WatchListReadAheadDecoderConcurrent WatchListReadAheadDecoder = "concurrent"
 	// WatchListReadAheadDecoderRing uses reusable slots without per-event timing traces.
 	WatchListReadAheadDecoderRing WatchListReadAheadDecoder = "ring"
+	// WatchListReadAheadDecoderOrdered uses per-event goroutines with an ordered response queue.
+	WatchListReadAheadDecoderOrdered WatchListReadAheadDecoder = "ordered"
 	// WatchListReadAheadDecoderSerial uses one envelope reader and decodes objects in Decode.
 	WatchListReadAheadDecoderSerial WatchListReadAheadDecoder = "serial"
 )
