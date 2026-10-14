@@ -166,6 +166,11 @@ func NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(logger klog.Logge
 	if decodeConcurrency <= 0 {
 		decodeConcurrency = defaultReadAheadDecodeConcurrency
 	}
+	logger.Info("Creating watch decoder",
+		"decoder", "ReadAheadDecoder",
+		"queueLength", queueLength,
+		"decodeConcurrency", decodeConcurrency,
+	)
 	d := &ReadAheadDecoder{
 		stream:            stream,
 		object:            object,
