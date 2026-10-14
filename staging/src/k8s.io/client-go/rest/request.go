@@ -873,7 +873,7 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 	}
 	var decoder watch.Decoder
 	if readAhead {
-		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent || r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial || r.watchListReadAheadDecoder == WatchListReadAheadDecoderRing || r.watchListReadAheadDecoder == WatchListReadAheadDecoderOrdered {
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent || r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentOldDirty || r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentFixedWorkersWithOutputQueue || r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentWithOutputQueue || r.watchListReadAheadDecoder == WatchListReadAheadDecoderSerial || r.watchListReadAheadDecoder == WatchListReadAheadDecoderRing || r.watchListReadAheadDecoder == WatchListReadAheadDecoderOrdered {
 			frameReader := framer.NewFrameReader(resp.Body)
 			watchEventDecoder := streaming.NewDecoder(frameReader, streamingSerializer)
 			decoder = r.newWatchDecoder(ctx, mediaType, streamingSerializer, watchEventDecoder, objectDecoder)
@@ -901,6 +901,18 @@ func (r *Request) newStreamWatcher(ctx context.Context, resp *http.Response) (wa
 
 func (r *Request) newWatchDecoder(ctx context.Context, mediaType string, serializer runtime.Serializer, stream streaming.Decoder, object runtime.Decoder) watch.Decoder {
 	if r.useWatchListReadAhead(mediaType, serializer) {
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentFixedWorkersWithOutputQueue {
+			return restclientwatch.NewConcurrentDecoderWithFixedWorkersAndOutputQueue(stream, object)
+		}
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentWithOutputQueue {
+			return restclientwatch.NewConcurrentDecoderWithOutputQueue(stream, object)
+		}
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrentOldDirty {
+			return restclientwatch.NewReadAheadDecoderWithLoggerAndQueueLengthAndConcurrency(klog.FromContext(ctx), stream, object, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
+		}
+		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderConcurrent {
+			return restclientwatch.NewConcurrentDecoder(stream, object)
+		}
 		if r.watchListReadAheadDecoder == WatchListReadAheadDecoderOrdered {
 			return restclientwatch.NewOrderedReadAheadDecoder(stream, object, r.watchListReadAheadQueueLength, r.watchListReadAheadDecodeConcurrency)
 		}

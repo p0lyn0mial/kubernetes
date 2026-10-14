@@ -105,6 +105,79 @@ func TestWatchListReadAheadSelection(t *testing.T) {
 	}
 }
 
+func TestWatchListConcurrentDecoderSelection(t *testing.T) {
+	config := &Config{
+		Host: "http://localhost", GroupVersion: &v1.SchemeGroupVersion, NegotiatedSerializer: scheme.Codecs,
+		ExperimentalWatchListReadAhead: true, ExperimentalWatchListReadAheadDecoder: WatchListReadAheadDecoderConcurrent,
+	}
+	client, err := RESTClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := streaming.NewDecoder(io.NopCloser(strings.NewReader("")), scheme.Codecs.UniversalDeserializer())
+	decoder := client.Get().Param("sendInitialEvents", "true").newWatchDecoder(context.Background(), runtime.ContentTypeJSON, scheme.Codecs.SupportedMediaTypes()[0].Serializer, stream, scheme.Codecs.UniversalDeserializer())
+	defer decoder.Close()
+	if _, ok := decoder.(*restclientwatch.ConcurrentDecoder); !ok {
+		t.Fatalf("decoder = %T, want *watch.ConcurrentDecoder", decoder)
+	}
+}
+
+func TestWatchListConcurrentDecoderWithOutputQueueSelection(t *testing.T) {
+	config := &Config{
+		Host: "http://localhost", GroupVersion: &v1.SchemeGroupVersion, NegotiatedSerializer: scheme.Codecs,
+		ExperimentalWatchListReadAhead: true, ExperimentalWatchListReadAheadDecoder: WatchListReadAheadDecoderConcurrentWithOutputQueue,
+	}
+	client, err := RESTClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := streaming.NewDecoder(io.NopCloser(strings.NewReader("")), scheme.Codecs.UniversalDeserializer())
+	decoder := client.Get().Param("sendInitialEvents", "true").newWatchDecoder(context.Background(), runtime.ContentTypeJSON, scheme.Codecs.SupportedMediaTypes()[0].Serializer, stream, scheme.Codecs.UniversalDeserializer())
+	defer decoder.Close()
+	if _, ok := decoder.(*restclientwatch.ConcurrentDecoderWithOutputQueue); !ok {
+		t.Fatalf("decoder = %T, want *watch.ConcurrentDecoderWithOutputQueue", decoder)
+	}
+}
+
+func TestWatchListConcurrentOldDirtyDecoderSelection(t *testing.T) {
+	config := &Config{
+		Host: "http://localhost", GroupVersion: &v1.SchemeGroupVersion, NegotiatedSerializer: scheme.Codecs,
+		ExperimentalWatchListReadAhead: true, ExperimentalWatchListReadAheadDecoder: WatchListReadAheadDecoderConcurrentOldDirty,
+		ExperimentalWatchListReadAheadQueueLength: 7, ExperimentalWatchListReadAheadDecodeConcurrency: 2,
+	}
+	client, err := RESTClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := streaming.NewDecoder(io.NopCloser(strings.NewReader("")), scheme.Codecs.UniversalDeserializer())
+	decoder := client.Get().Param("sendInitialEvents", "true").newWatchDecoder(context.Background(), runtime.ContentTypeJSON, scheme.Codecs.SupportedMediaTypes()[0].Serializer, stream, scheme.Codecs.UniversalDeserializer())
+	defer decoder.Close()
+	if _, ok := decoder.(*restclientwatch.ReadAheadDecoder); !ok {
+		t.Fatalf("decoder = %T, want *watch.ReadAheadDecoder", decoder)
+	}
+}
+
+func TestWatchListConcurrentFixedWorkersWithOutputQueueSelection(t *testing.T) {
+	config := &Config{
+		Host: "http://localhost", GroupVersion: &v1.SchemeGroupVersion, NegotiatedSerializer: scheme.Codecs,
+		ExperimentalWatchListReadAhead: true, ExperimentalWatchListReadAheadDecoder: WatchListReadAheadDecoderConcurrentFixedWorkersWithOutputQueue,
+	}
+	client, err := RESTClientFor(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stream := streaming.NewDecoder(io.NopCloser(strings.NewReader("")), scheme.Codecs.UniversalDeserializer())
+	decoder := client.Get().Param("sendInitialEvents", "true").newWatchDecoder(context.Background(), runtime.ContentTypeJSON, scheme.Codecs.SupportedMediaTypes()[0].Serializer, stream, scheme.Codecs.UniversalDeserializer())
+	defer decoder.Close()
+	if _, ok := decoder.(*restclientwatch.ConcurrentDecoderWithFixedWorkersAndOutputQueue); !ok {
+		t.Fatalf("decoder = %T, want *watch.ConcurrentDecoderWithFixedWorkersAndOutputQueue", decoder)
+	}
+}
+
 func TestWatchListReadAheadFlow(t *testing.T) {
 	for _, info := range scheme.Codecs.SupportedMediaTypes() {
 		if info.MediaType != runtime.ContentTypeJSON && info.MediaType != runtime.ContentTypeProtobuf {

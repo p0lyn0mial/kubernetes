@@ -53,6 +53,12 @@ const (
 	WatchListReadAheadDecoderBatch WatchListReadAheadDecoder = "batch"
 	// WatchListReadAheadDecoderConcurrent uses the per-event read-ahead decoder.
 	WatchListReadAheadDecoderConcurrent WatchListReadAheadDecoder = "concurrent"
+	// WatchListReadAheadDecoderConcurrentOldDirty uses the original concurrent read-ahead decoder.
+	WatchListReadAheadDecoderConcurrentOldDirty WatchListReadAheadDecoder = "concurrent_old_dirty"
+	// WatchListReadAheadDecoderConcurrentFixedWorkersWithOutputQueue uses fixed workers and an output buffer.
+	WatchListReadAheadDecoderConcurrentFixedWorkersWithOutputQueue WatchListReadAheadDecoder = "concurrent_fixed_workers_and_output_buff"
+	// WatchListReadAheadDecoderConcurrentWithOutputQueue uses the concurrent decoder with an output buffer.
+	WatchListReadAheadDecoderConcurrentWithOutputQueue WatchListReadAheadDecoder = "concurrent_with_output_buff"
 	// WatchListReadAheadDecoderRing uses reusable slots without per-event timing traces.
 	WatchListReadAheadDecoderRing WatchListReadAheadDecoder = "ring"
 	// WatchListReadAheadDecoderOrdered uses per-event goroutines with an ordered response queue.
